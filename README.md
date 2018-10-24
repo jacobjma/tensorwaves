@@ -1,2 +1,2 @@
 # TensorWaves
-An object-oriented electron microscopy simulator with a tensorflow backend
+An object-oriented electron microscopy simulator with a TensorFlow backend
