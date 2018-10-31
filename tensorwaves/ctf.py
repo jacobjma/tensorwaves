@@ -4,8 +4,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 
-import utils
-from bases import FactoryBase, TensorBase
+from tensorwaves import utils
+from tensorwaves.bases import FactoryBase, TensorBase
 
 
 class CTF(FactoryBase):

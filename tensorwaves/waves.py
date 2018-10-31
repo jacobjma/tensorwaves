@@ -1,15 +1,17 @@
-import tensorflow as tf
-import numpy as np
-from bases import TensorBase, FactoryBase
-import plotutils
-from ctf import CTF
 import matplotlib.pyplot as plt
+import numpy as np
+import tensorflow as tf
+
+from tensorwaves import plotutils
+from tensorwaves.bases import TensorBase, FactoryBase
+from tensorwaves.ctf import CTF
+from tensorwaves import utils
 
 
 class TensorWaves(TensorBase):
 
     def __init__(self, tensor, energy=None, extent=None, sampling=None):
-        super().__init__(tensor=tensor, energy=energy, extent=extent, sampling=sampling, dimension=2)
+        super().__init__(tensor=tensor, energy=energy, extent=extent, sampling=sampling)
 
     @property
     def n_waves(self):
@@ -21,9 +23,12 @@ class TensorWaves(TensorBase):
     def fourier_propagator(self, dz):
         kx, ky = self.fftfreq()
         k = ((kx ** 2)[:, None] + (ky ** 2)[None, :])
-        return
+        return utils.fourier_propagator(k, dz, self.wavelength)[None, :, :]
 
-    def _propagate(self, propagator):
+    def propagate(self, dz):
+        self._tensor = self._fourier_convolution(self.fourier_propagator(dz))
+
+    def _fourier_convolution(self, propagator):
         return tf.ifft2d(tf.fft2d(self._tensor) * propagator)
 
     def apply_ctf(self, ctf=None, **kwargs):
@@ -32,12 +37,11 @@ class TensorWaves(TensorBase):
         else:
             ctf = CTF(**kwargs)
         ctf.adapt(self)
-        self._tensor = self._propagate(ctf._tensor()[None, :, :])
+        self._tensor = self._fourier_convolution(ctf._tensor()[None, :, :])
 
     def show_image(self):
         ax, mapable = plotutils.show_image(np.abs(self._tensor[0].numpy()) ** 2)
         plt.colorbar(mapable)
-        #plotutils.add_colorbar(ax, mapable)
 
     def __repr__(self):
         if self.n_waves > 1:

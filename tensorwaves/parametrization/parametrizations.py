@@ -1,4 +1,5 @@
 import numpy as np
+import tensorflow as tf
 from ase import units
 from scipy.special import erfc
 
@@ -8,19 +9,23 @@ def lobato_potential(parameters):
          zip(('a1', 'a2', 'a3', 'a4', 'a5'), ('b1', 'b2', 'b3', 'b4', 'b5'))]
     b = [2 * np.pi / np.sqrt(parameters[key]) for key in ('b1', 'b2', 'b3', 'b4', 'b5')]
 
-    v = lambda r: (a[0] * (2. / (b[0] * r) + 1) * np.exp(-b[0] * r) +
-                   a[1] * (2. / (b[1] * r) + 1) * np.exp(-b[1] * r) +
-                   a[2] * (2. / (b[2] * r) + 1) * np.exp(-b[2] * r) +
-                   a[3] * (2. / (b[3] * r) + 1) * np.exp(-b[3] * r) +
-                   a[4] * (2. / (b[4] * r) + 1) * np.exp(-b[4] * r))
+    def v(R2, z2):
+        r = tf.sqrt(R2 + z2)
+        return (a[0] * (2. / (b[0] * r) + 1) * tf.exp(-b[0] * r) +
+                a[1] * (2. / (b[1] * r) + 1) * tf.exp(-b[1] * r) +
+                a[2] * (2. / (b[2] * r) + 1) * tf.exp(-b[2] * r) +
+                a[3] * (2. / (b[3] * r) + 1) * tf.exp(-b[3] * r) +
+                a[4] * (2. / (b[4] * r) + 1) * tf.exp(-b[4] * r))
 
-    dvdr = lambda r: - (a[0] * (2 / (b[0] * r ** 2) + 2 / r + b[0]) * np.exp(-b[0] * r) +
-                        a[1] * (2 / (b[1] * r ** 2) + 2 / r + b[1]) * np.exp(-b[1] * r) +
-                        a[2] * (2 / (b[2] * r ** 2) + 2 / r + b[2]) * np.exp(-b[2] * r) +
-                        a[3] * (2 / (b[3] * r ** 2) + 2 / r + b[3]) * np.exp(-b[3] * r) +
-                        a[4] * (2 / (b[4] * r ** 2) + 2 / r + b[4]) * np.exp(-b[4] * r))
+    # dvdr = lambda r: - (a[0] * (2 / (b[0] * r ** 2) + 2 / r + b[0]) * tf.exp(-b[0] * r) +
+    #                     a[1] * (2 / (b[1] * r ** 2) + 2 / r + b[1]) * tf.exp(-b[1] * r) +
+    #                     a[2] * (2 / (b[2] * r ** 2) + 2 / r + b[2]) * tf.exp(-b[2] * r) +
+    #                     a[3] * (2 / (b[3] * r ** 2) + 2 / r + b[3]) * tf.exp(-b[3] * r) +
+    #                     a[4] * (2 / (b[4] * r ** 2) + 2 / r + b[4]) * tf.exp(-b[4] * r))
 
-    return v, dvdr
+    return v, None
+
+
 
 
 def lobato_scattering_factor(parameters):
@@ -57,20 +62,18 @@ def lobato_density(parameters):
 
 def kirkland_potential(parameters):
     a = [np.pi * parameters[key] for key in ('a1', 'a2', 'a3')]
-    b = [2 * np.pi * np.sqrt(parameters[key]) for key in ('b1', 'b2', 'b3')]
+    b = [2 * np.pi * tf.sqrt(parameters[key]) for key in ('b1', 'b2', 'b3')]
     c = [np.pi ** (3 / 2.) * parameters[key_c] / parameters[key_d] ** (3 / 2.) for key_c, key_d in
          zip(('c1', 'c2', 'c3'), ('d1', 'd2', 'd3'))]
     d = [np.pi ** 2 / parameters[key] for key in ('d1', 'd2', 'd3')]
 
-    v = lambda r: (a[0] * np.exp(-b[0] * r) / r + c[0] * np.exp(-d[0] * r ** 2) +
-                   a[1] * np.exp(-b[1] * r) / r + c[1] * np.exp(-d[1] * r ** 2) +
-                   a[2] * np.exp(-b[2] * r) / r + c[2] * np.exp(-d[2] * r ** 2))
+    v = lambda r: (a[0] * tf.exp(-b[0] * r) / r + c[0] * tf.exp(-d[0] * r ** 2) +
+                   a[1] * tf.exp(-b[1] * r) / r + c[1] * tf.exp(-d[1] * r ** 2) +
+                   a[2] * tf.exp(-b[2] * r) / r + c[2] * tf.exp(-d[2] * r ** 2))
 
-    dvdr = lambda r: (- a[0] * (1 / r + b[0]) * np.exp(-b[0] * r) / r - 2 * c[0] * d[0] * r * np.exp(-d[0] * r ** 2)
-                      - a[1] * (1 / r + b[1]) * np.exp(-b[1] * r) / r - 2 * c[1] * d[1] * r * np.exp(-d[1] * r ** 2)
-                      - a[2] * (1 / r + b[2]) * np.exp(-b[2] * r) / r - 2 * c[2] * d[2] * r * np.exp(-d[2] * r ** 2)
-                      )
-
+    dvdr = lambda r: (- a[0] * (1 / r + b[0]) * tf.exp(-b[0] * r) / r - 2 * c[0] * d[0] * r * tf.exp(-d[0] * r ** 2)
+                      - a[1] * (1 / r + b[1]) * tf.exp(-b[1] * r) / r - 2 * c[1] * d[1] * r * tf.exp(-d[1] * r ** 2)
+                      - a[2] * (1 / r + b[2]) * tf.exp(-b[2] * r) / r - 2 * c[2] * d[2] * r * tf.exp(-d[2] * r ** 2))
     return v, dvdr
 
 
@@ -169,21 +172,21 @@ def weickenmeier_scattering_factor(parameters):
 potential_dict = {'lobato': {'potential': lobato_potential,
                              'scattering_factor': lobato_scattering_factor,
                              'density': lobato_density,
-                             'default_parameters': 'data/lobato.txt'},
+                             'default_parameters': 'tensorwaves/data/potentials/lobato.txt'},
                   'kirkland': {'potential': kirkland_potential,
                                'scattering_factor': kirkland_scattering_factor,
                                'density': None,
-                               'default_parameters': 'data/kirkland.txt'},
+                               'default_parameters': 'tensorwaves/data/potentials/kirkland.txt'},
                   'peng': {'potential': gaussian_sum_potential,
                            'scattering_factor': gaussian_sum_scattering_factor,
                            'density': None,
-                           'default_parameters': 'data/peng.txt'},
+                           'default_parameters': 'tensorwaves/data/potentials/peng.txt'},
                   'weickenmeier': {'potential': weickenmeier_potential,
                                    'scattering_factor': weickenmeier_scattering_factor,
                                    'density': None,
-                                   'default_parameters': 'data/weickenmeier.txt'},
+                                   'default_parameters': 'tensorwaves/data/potentials/weickenmeier.txt'},
                   'gpaw': {'potential': kirkland_potential,
                            'scattering_factor': kirkland_scattering_factor,
                            'density': None,
-                           'default_parameters': 'data/gpaw.txt'}
+                           'default_parameters': 'tensorwaves/data/potentials/gpaw.txt'}
                   }

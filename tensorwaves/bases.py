@@ -1,31 +1,22 @@
 import collections
 
 import tensorflow as tf
+import numpy as np
 
-import utils
-
-
-def linspace_no_endpoint(n, l):
-    return tf.lin_space(0., l - l / n, n)
-
-
-def fftfreq(n, h):
-    N = (n - 1) // 2 + 1
-    p1 = tf.lin_space(0., N - 1, N)
-    p2 = tf.lin_space(-float(n // 2), -1, n // 2)
-    return tf.concat((p1, p2), axis=0) / (n * h)
+from tensorwaves import utils
 
 
 def _consistent_grid(gpts, extent, sampling):
     if (gpts is not None) & (extent is not None):
-        sampling = tuple(l / n for n, l in zip(gpts, extent))
+        sampling = tf.constant([l / n for n, l in zip(gpts, extent)], dtype=tf.float32)
 
     elif (gpts is not None) & (sampling is not None):
-        extent = tuple(n * h for n, h in zip(gpts, sampling))
+        extent = tf.constant([n * h for n, h in zip(gpts, sampling)], dtype=tf.float32)
 
     elif (extent is not None) & (sampling is not None):
-        gpts = tuple(int(l / h) for l, h in zip(extent, sampling))
-        sampling = tuple(l / n for n, l in zip(gpts, extent))
+        gpts = tf.ceil(tf.constant(extent, dtype=tf.float32) / sampling)
+        sampling = tf.constant(extent, dtype=tf.float32) / gpts
+        gpts = tf.cast(gpts, dtype=tf.int32)
 
     return gpts, extent, sampling
 
@@ -54,7 +45,7 @@ def _print_grid(gpts, extent, sampling):
         tokens.append('no scale')
 
     if gpts is not None:
-        tokens.append('x'.join(map(str, gpts)) + ' gpts')
+        tokens.append('x'.join(map(lambda x: '%d' % x, gpts)) + ' gpts')
     else:
         tokens.append('no grid')
 
@@ -75,12 +66,75 @@ def _print_energy(energy):
         return '{} keV ({} Angstrom)'.format(energy / 1000, ('%.6f' % wavelength).rstrip('0').rstrip('.'))
 
 
-class Grid(object):
+class ZAxis(object):
+
+    def __init__(self, entrance_plane=0, exit_plane=None):
+        self._entrance_plane = entrance_plane
+        self._exit_plane = exit_plane
+
+    @property
+    def depth(self):
+        if (self.exit_plane is None) | (self.entrance_plane is None):
+            return None
+        else:
+            return self._exit_plane - self._entrance_plane
+
+    @property
+    def entrance_plane(self):
+        return self._entrance_plane
+
+    @property
+    def exit_plane(self):
+        return self._exit_plane
+
+
+class Box(ZAxis):
+
+    def __init__(self, extent=None, entrance_plane=0, exit_plane=None):
+        self._extent = extent
+        super().__init__(entrance_plane=entrance_plane, exit_plane=exit_plane)
+
+    @property
+    def box(self):
+        if (self.extent is None) | (self.depth is None):
+            return None
+        else:
+            return tf.concat((self.extent, [self.depth]), 0)
+
+    @property
+    def extent(self):
+        return self._extent
+
+    @property
+    def gpts(self):
+        return None
+
+    @property
+    def sampling(self):
+        return None
+
+    def is_compatible(self, other):
+        return self._extent == other.extent
+
+    def adapt(self, other):
+        self._extent = other.extent
+
+
+class XYGrid(object):
 
     def __init__(self, gpts=None, extent=None, sampling=None):
-        self._gpts = gpts
-        self._extent = extent
-        self._sampling = sampling
+        if gpts is not None:
+            self._gpts = tf.constant(gpts, tf.int32)
+        else:
+            self._gpts = None
+        if extent is not None:
+            self._extent = tf.constant(extent, tf.float32)
+        else:
+            self._extent = None
+        if sampling is not None:
+            self._sampling = tf.constant(sampling, tf.float32)
+        else:
+            self._sampling = None
 
         self._set_consistent_grid(self.gpts, self.extent, self.sampling)
 
@@ -139,10 +193,10 @@ class Grid(object):
         self._set_consistent_grid(gpts, extent, sampling)
 
     def linspace(self):
-        return tuple(linspace_no_endpoint(n, l) for n, l in zip(self.gpts, self.extent))
+        return tuple(utils.linspace_no_endpoint(n, l) for n, l in zip(self.gpts, self.extent))
 
     def fftfreq(self):
-        return tuple(fftfreq(n, h) for n, h in zip(self.gpts, self.sampling))
+        return tuple(utils.fftfreq(n, h) for n, h in zip(self.gpts, self.sampling))
 
     def __repr__(self):
         return _print_grid(self.gpts, self.extent, self.sampling)
@@ -166,6 +220,11 @@ class Energy(object):
         self._is_energy_defined()
         return utils.energy2wavelength(self._energy)
 
+    @property
+    def interaction_parameter(self):
+        self._is_energy_defined()
+        return utils.energy2sigma(self._energy)
+
     def adapt(self, other):
         if self._energy is None:
             self._energy = other._energy
@@ -178,48 +237,33 @@ class Energy(object):
         return _print_energy(self.energy)
 
 
-class FactoryBase(Energy, Grid):
+class FactoryBase(Energy, XYGrid):
 
     def __init__(self, energy=None, gpts=None, extent=None, sampling=None):
         Energy.__init__(self, energy=energy)
-        Grid.__init__(self, gpts=gpts, extent=extent, sampling=sampling)
+        XYGrid.__init__(self, gpts=gpts, extent=extent, sampling=sampling)
 
     def adapt(self, other):
-        Grid.adapt(self, other)
+        XYGrid.adapt(self, other)
         Energy.adapt(self, other)
 
     def is_compatible(self, other):
-        if not Grid.is_compatible(self, other):
+        if not XYGrid.is_compatible(self, other):
             return False
         else:
             return Energy.is_compatible(self, other)
 
     def __repr__(self):
-        return '{}\n{}'.format(Grid.__repr__(self), Energy.__repr__(self))
+        return '{}\n{}'.format(XYGrid.__repr__(self), Energy.__repr__(self))
 
 
-class TensorBase(Energy, Grid):
+class TensorBase(Energy, XYGrid):
 
     def __init__(self, tensor, energy=None, extent=None, sampling=None, dimension=None):
         self._tensor = tensor
 
-        self._dimension = None
-        if isinstance(extent, collections.Iterable):
-            self._dimension = len(extent)
-        elif isinstance(sampling, collections.Iterable):
-            self._dimension = len(sampling)
-
-        if self._dimension is None:
-            self._dimension = dimension
-
-        if (self._dimension != dimension) & (dimension is not None):
-            raise RuntimeError()
-
-        if self._dimension is None:
-            self._dimension = len(self.shape)
-
         Energy.__init__(self, energy=energy)
-        Grid.__init__(self, extent=extent, sampling=sampling)
+        XYGrid.__init__(self, extent=extent, sampling=sampling, dimension=dimension)
 
         self._gpts = None
 
@@ -240,14 +284,14 @@ class TensorBase(Energy, Grid):
         return self._tensor
 
     def adapt(self, other):
-        Grid.adapt(self, other)
+        XYGrid.adapt(self, other)
         Energy.adapt(self, other)
 
     def is_compatible(self, other):
-        if not Grid.is_compatible(self, other):
+        if not XYGrid.is_compatible(self, other):
             return False
         else:
             return Energy.is_compatible(self, other)
 
     def __repr__(self):
-        return '{}\n{}'.format(Grid.__repr__(self), Energy.__repr__(self))
+        return '{}\n{}'.format(XYGrid.__repr__(self), Energy.__repr__(self))
