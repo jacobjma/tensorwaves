@@ -1,297 +1,245 @@
-import collections
+import numbers
+from math import ceil
+from collections import OrderedDict
 
-import tensorflow as tf
-import numpy as np
+import ipywidgets
+import traitlets
 
 from tensorwaves import utils
 
-
-def _consistent_grid(gpts, extent, sampling):
-    if (gpts is not None) & (extent is not None):
-        sampling = tf.constant([l / n for n, l in zip(gpts, extent)], dtype=tf.float32)
-
-    elif (gpts is not None) & (sampling is not None):
-        extent = tf.constant([n * h for n, h in zip(gpts, sampling)], dtype=tf.float32)
-
-    elif (extent is not None) & (sampling is not None):
-        gpts = tf.ceil(tf.constant(extent, dtype=tf.float32) / sampling)
-        sampling = tf.constant(extent, dtype=tf.float32) / gpts
-        gpts = tf.cast(gpts, dtype=tf.int32)
-
-    return gpts, extent, sampling
+DEFAULT_SAMPLING = .05
+MAX_GPTS = 1e1 / utils.EPS
 
 
-def _is_grid_compatible(grid1, grid2):
-    if (grid1.gpts is not None) & (grid2.gpts is not None):
-        if grid1.gpts != grid2.gpts:
-            return False
+def _flatten_graph(graph):
+    flattened = {}
+    top = next(iter(graph.keys()))
+    queue = [(top, graph[top])]
+    while queue:
+        name, graph = queue.pop()
+        flattened[name] = []
+        for key, value in graph.items():
+            if isinstance(value, dict):
+                queue.append((key, value))
+            else:
+                flattened[name].append(value)
 
-    if (grid1.extent is not None) & (grid2.extent is not None):
-        if grid1.extent != grid2.extent:
-            return False
-
-    if (grid1.sampling is not None) & (grid2.sampling is not None):
-        if grid1.sampling != grid2.sampling:
-            return False
-
-    return True
+    return flattened
 
 
-def _print_grid(gpts, extent, sampling):
-    tokens = []
+def _dig_upstream(node, graph):
+    for name, trait in node.traits().items():
+        if isinstance(trait, traitlets.Instance):
+            if (Node in trait.klass.__bases__) | (TensorFactory in trait.klass.__bases__):
+                new_node = trait.get(node)
+                graph[new_node] = {}
+                _dig_upstream(new_node, graph[new_node])
+        else:
+            graph[name] = trait
+
+    return graph
+
+
+class Node(traitlets.HasTraits):
+    _widgets = {}
+
+    def _build_widgets(self):
+        return {}
+
+    def _link_widgets(self, widgets):
+        for name, widget in widgets.items():
+            traitlets.link((self, name), (widget, 'value'))
+
+    def _layout_widgets(self, widgets):
+        return ipywidgets.HBox(list(widgets.values()))
+
+    def _interface(self):
+        self._widgets = self._build_widgets()
+        self._link_widgets(self._widgets)
+        return self._layout_widgets(self._widgets)
+
+    def get_widgets(self, include_upstream=True):
+        if include_upstream:
+            graph = _flatten_graph(self.upstream_traits())
+            widgets = {}
+            for node in graph.keys():
+                widgets[node] = node._widgets
+            return widgets
+        else:
+            return self._widgets
+
+    def interface(self, include_upstream=True):
+        if include_upstream:
+            graph = _flatten_graph(self.upstream_traits())
+            box = []
+            for node in graph.keys():
+                box.append(node._interface())
+            return ipywidgets.VBox(box)
+        else:
+            return self._interface()
+
+    def graph_observe(self, callable):
+        for key, widget_list in self._widgets.items():
+            for widget in widget_list:
+                widget.observe(callable, 'value')
+
+    def graph_unobserve(self, callable):
+        for key, widget_list in self._widgets.items():
+            for widget in widget_list:
+                widget.unobserve(callable, 'value')
+
+    def upstream_traits(self):
+        graph = {}
+        graph[self] = {}
+        graph[self] = _dig_upstream(self, graph[self])
+        return graph
+
+
+class Grid(Node):
+    description = traitlets.Unicode(default_value='Grid')
+
+    length = traitlets.Float(default_value=10, min=utils.EPS)
+    gpts = traitlets.Int(default_value=200, min=1, max=MAX_GPTS)
+    sampling = traitlets.Float(default_value=.05, min=utils.EPS)
+    adjusted_sampling = traitlets.Float(default_value=.05, min=utils.EPS)
+
+    def _gpts2sampling(self, sampling):
+        return int(ceil(self.length / sampling))
+
+    def _sampling2gpts(self, gpts):
+        return self.length / gpts
+
+    @traitlets.observe('length', 'gpts', 'sampling')
+    def _observe_all(self, _):
+        self.adjusted_sampling = self.length / self._gpts2sampling(self.sampling)
+
+    @traitlets.observe('length')
+    def _observe_length(self, _):
+        old_sampling = self.sampling
+        self.gpts = self._gpts2sampling(self.sampling)
+        self.sampling = old_sampling
+
+    @traitlets.observe('gpts')
+    def _observe_gpts(self, change):
+        self.sampling = self._sampling2gpts(change['new'])
+
+    @traitlets.observe('sampling')
+    def _observe_sampling(self, change):
+        self.gpts = self._gpts2sampling(change['new'])
+
+    def _build_widgets(self):
+        widgets = OrderedDict()
+        widgets['length'] = ipywidgets.BoundedFloatText(description='Length', value=self.length, min=utils.EPS)
+        widgets['gpts'] = ipywidgets.BoundedIntText(description='Grid points', value=self.gpts, min=1, max=MAX_GPTS)
+        widgets['sampling'] = ipywidgets.BoundedFloatText(description='Sampling', value=self.sampling, min=utils.EPS)
+        return widgets
+
+
+class Accelerator(Node):
+    description = traitlets.Unicode(default_value='Accelerator')
+
+    energy = traitlets.Float(default_value=100e3)
+    wavelength = traitlets.Float()
+
+    @traitlets.default('wavelength')
+    def _observe_energy(self):
+        return utils.energy2wavelength(self.energy)
+
+    @traitlets.observe('energy')
+    def _observe_energy(self, change):
+        self.wavelength = utils.energy2wavelength(change['new'])
+
+    def get_interaction_parameter(self):
+        if self.energy is None:
+            return None
+        else:
+            return utils.energy2sigma(self.energy)
+
+    def _build_widgets(self):
+        widgets = OrderedDict()
+        widgets['energy'] = ipywidgets.BoundedFloatText(description='Energy', value=self.energy, min=utils.EPS,
+                                                        step=10e3, max=1e10)
+        return widgets
+
+
+class Space(Node):
+    name = traitlets.Unicode(default_value='space')
+    description = traitlets.Unicode(default_value='Space')
+
+    space = traitlets.Unicode(default_value='direct')
+    _space_summary = lambda x: 'Calculated in {} space'.format(x)
+
+    @traitlets.validate('space')
+    def _validate_space(self, proposal):
+        if proposal['value'].lower() not in ('direct', 'fourier', 'hybrid'):
+            raise traitlets.TraitError()
+        else:
+            return proposal['value']
+
+
+def parse_xy_grid(extent=None, gpts=None, sampling=None):
+    x_grid = Grid(description='X Grid')
+    y_grid = Grid(description='Y Grid')
+
     if extent is not None:
-        tokens.append('x'.join(map(lambda x: ('%.6f' % x).rstrip('0').rstrip('.'), extent)) + ' Angstrom')
-    else:
-        tokens.append('no scale')
+        x_grid.extent = extent if isinstance(extent, numbers.Number) else extent[0]
+        y_grid.extent = extent if isinstance(extent, numbers.Number) else extent[1]
 
     if gpts is not None:
-        tokens.append('x'.join(map(lambda x: '%d' % x, gpts)) + ' gpts')
-    else:
-        tokens.append('no grid')
+        x_grid.gpts = gpts if isinstance(gpts, numbers.Number) else gpts[0]
+        y_grid.gpts = gpts if isinstance(gpts, numbers.Number) else gpts[1]
 
     if sampling is not None:
-        tokens.append(
-            'x'.join(map(lambda x: ('%.6f' % x).rstrip('0').rstrip('.'), sampling)) + ' Angstrom / gpt')
-    else:
-        tokens.append('no resolution')
+        x_grid.extent = sampling if isinstance(sampling, numbers.Number) else sampling[0]
+        y_grid.extent = sampling if isinstance(sampling, numbers.Number) else sampling[1]
 
-    return '{}, {} ({})'.format(*tokens)
+    return x_grid, y_grid
 
 
-def _print_energy(energy):
-    if energy is None:
-        return 'no energy'
-    else:
-        wavelength = utils.energy2wavelength(energy)
-        return '{} keV ({} Angstrom)'.format(energy / 1000, ('%.6f' % wavelength).rstrip('0').rstrip('.'))
+def parse_accelerator(energy):
+    accelerator = Accelerator()
+    if energy is not None:
+        accelerator.energy = energy
+    return accelerator
 
 
-class ZAxis(object):
-
-    def __init__(self, entrance_plane=0, exit_plane=None):
-        self._entrance_plane = entrance_plane
-        self._exit_plane = exit_plane
-
-    @property
-    def depth(self):
-        if (self.exit_plane is None) | (self.entrance_plane is None):
-            return None
-        else:
-            return self._exit_plane - self._entrance_plane
-
-    @property
-    def entrance_plane(self):
-        return self._entrance_plane
+def parse_space(space):
+    accelerator = Space()
+    if space is not None:
+        accelerator.space = space
+    return accelerator
 
-    @property
-    def exit_plane(self):
-        return self._exit_plane
 
+def trait2property(name, has_traits):
+    """Helper function to easily create attribute property from trait."""
 
-class Box(ZAxis):
+    def getter(self):
+        return self.get(name, has_traits)
 
-    def __init__(self, extent=None, entrance_plane=0, exit_plane=None):
-        self._extent = extent
-        super().__init__(entrance_plane=entrance_plane, exit_plane=exit_plane)
+    def setter(self, value):
+        self.set(name, has_traits, value)
 
-    @property
-    def box(self):
-        if (self.extent is None) | (self.depth is None):
-            return None
-        else:
-            return tf.concat((self.extent, [self.depth]), 0)
+    return property(getter, setter)
 
-    @property
-    def extent(self):
-        return self._extent
 
-    @property
-    def gpts(self):
-        return None
+class TensorFactory(Node):
+    x_grid = traitlets.Instance(Grid)
+    y_grid = traitlets.Instance(Grid)
 
-    @property
-    def sampling(self):
-        return None
+    def __init__(self, extent=None, gpts=None, sampling=None):
+        self.x_grid, self.y_grid = parse_xy_grid(extent, gpts, sampling)
+        super().__init__()
 
-    def is_compatible(self, other):
-        return self._extent == other.extent
+    gpts = trait2property('gpts', ('x_grid', 'y_grid'))
+    sampling = trait2property('sampling', ('x_grid', 'y_grid'))
+    extent = trait2property('length', ('x_grid', 'y_grid'))
 
-    def adapt(self, other):
-        self._extent = other.extent
+    def get(self, name, has_traits):
+        return (getattr(getattr(self, has_traits[0]), name),
+                getattr(getattr(self, has_traits[1]), name))
 
-
-class XYGrid(object):
-
-    def __init__(self, gpts=None, extent=None, sampling=None):
-        if gpts is not None:
-            self._gpts = tf.constant(gpts, tf.int32)
-        else:
-            self._gpts = None
-        if extent is not None:
-            self._extent = tf.constant(extent, tf.float32)
-        else:
-            self._extent = None
-        if sampling is not None:
-            self._sampling = tf.constant(sampling, tf.float32)
-        else:
-            self._sampling = None
-
-        self._set_consistent_grid(self.gpts, self.extent, self.sampling)
-
-    def _set_consistent_grid(self, gpts, extent, sampling):
-        gpts, extent, sampling = _consistent_grid(gpts, extent, sampling)
-        self._gpts = gpts
-        self._extent = extent
-        self._sampling = sampling
-
-    @property
-    def gpts(self):
-        return self._gpts
-
-    @gpts.setter
-    def gpts(self, gpts):
-        self._set_consistent_grid(gpts, self.extent, self.sampling)
-
-    @property
-    def extent(self):
-        return self._extent
-
-    @extent.setter
-    def extent(self, extent):
-        self._set_consistent_grid(self.gpts, extent, self.sampling)
-
-    @property
-    def sampling(self):
-        return self._sampling
-
-    @sampling.setter
-    def sampling(self, sampling):
-        if self.extent is None:
-            gpts = self.gpts
-        else:
-            gpts = None
-        self._set_consistent_grid(gpts, self.extent, sampling)
-
-    def is_compatible(self, other):
-        return _is_grid_compatible(self, other)
-
-    def adapt(self, other):
-        if not _is_grid_compatible(self, other):
-            raise RuntimeError('incompatible grids')
-
-        gpts, extent, sampling = _consistent_grid(other.gpts, other.extent, other.sampling)
-
-        if self.gpts is not None:
-            gpts = self.gpts
-
-        if self.extent is not None:
-            extent = self.extent
-
-        if self.sampling is not None:
-            sampling = self.sampling
-
-        self._set_consistent_grid(gpts, extent, sampling)
-
-    def linspace(self):
-        return tuple(utils.linspace_no_endpoint(n, l) for n, l in zip(self.gpts, self.extent))
-
-    def fftfreq(self):
-        return tuple(utils.fftfreq(n, h) for n, h in zip(self.gpts, self.sampling))
-
-    def __repr__(self):
-        return _print_grid(self.gpts, self.extent, self.sampling)
-
-
-class Energy(object):
-
-    def __init__(self, energy=None):
-        self._energy = energy
-
-    def _is_energy_defined(self):
-        if self._energy is None:
-            raise RuntimeError('the energy is not defined')
-
-    @property
-    def energy(self):
-        return self._energy
-
-    @property
-    def wavelength(self):
-        self._is_energy_defined()
-        return utils.energy2wavelength(self._energy)
-
-    @property
-    def interaction_parameter(self):
-        self._is_energy_defined()
-        return utils.energy2sigma(self._energy)
-
-    def adapt(self, other):
-        if self._energy is None:
-            self._energy = other._energy
-
-    def is_compatible(self, other):
-        if (self._energy is not None) & (other._energy is not None):
-            return self._energy == other._energy
-
-    def __repr__(self):
-        return _print_energy(self.energy)
-
-
-class FactoryBase(Energy, XYGrid):
-
-    def __init__(self, energy=None, gpts=None, extent=None, sampling=None):
-        Energy.__init__(self, energy=energy)
-        XYGrid.__init__(self, gpts=gpts, extent=extent, sampling=sampling)
-
-    def adapt(self, other):
-        XYGrid.adapt(self, other)
-        Energy.adapt(self, other)
-
-    def is_compatible(self, other):
-        if not XYGrid.is_compatible(self, other):
-            return False
-        else:
-            return Energy.is_compatible(self, other)
-
-    def __repr__(self):
-        return '{}\n{}'.format(XYGrid.__repr__(self), Energy.__repr__(self))
-
-
-class TensorBase(Energy, XYGrid):
-
-    def __init__(self, tensor, energy=None, extent=None, sampling=None, dimension=None):
-        self._tensor = tensor
-
-        Energy.__init__(self, energy=energy)
-        XYGrid.__init__(self, extent=extent, sampling=sampling, dimension=dimension)
-
-        self._gpts = None
-
-    @property
-    def gpts(self):
-        return self.shape[-self._dimension:]
-
-    @gpts.setter
-    def gpts(self, _):
-        raise RuntimeError()
-
-    @property
-    def shape(self):
-        return tuple(dim.value for dim in self._tensor.get_shape())
-
-    @property
-    def tensor(self):
-        return self._tensor
-
-    def adapt(self, other):
-        XYGrid.adapt(self, other)
-        Energy.adapt(self, other)
-
-    def is_compatible(self, other):
-        if not XYGrid.is_compatible(self, other):
-            return False
-        else:
-            return Energy.is_compatible(self, other)
-
-    def __repr__(self):
-        return '{}\n{}'.format(XYGrid.__repr__(self), Energy.__repr__(self))
+    def set(self, name, has_traits, value):
+        if isinstance(value, numbers.Number) | (value is None):
+            value = (value, value)
+        setattr(getattr(self, has_traits[0]), name, value[0])
+        setattr(getattr(self, has_traits[1]), name, value[1])
