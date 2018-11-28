@@ -1,329 +1,389 @@
 import csv
 import math
+import os
+from collections import OrderedDict
 
+import ipywidgets
 import numpy as np
 import tensorflow as tf
 from ase import Atoms
-from ase.data import chemical_symbols
+from ase.data import covalent_radii
+from ase.data.colors import cpk_colors
 from scipy.optimize import brentq
 
-from tensorwaves import utils, plotutils
-#from tensorwaves.bases import FactoryBase, TensorBase
-from tensorwaves.parametrization import potentials
+from tensorwaves.bases import Grid
+import matplotlib.pyplot as plt
 
 
-def find_cutoff(func, min_value, xmin=1e-16, xmax=5):
-    return np.float32(brentq(lambda x: func(x) - min_value, xmin, xmax))
+# from tensorwaves.display import Display
 
 
-def load_parameter_file(filename):
-    parameters = {}
-    with open(filename, 'r') as csvfile:
-        reader = csv.reader(csvfile, delimiter=',')
-        next(reader)
-        keys = next(reader)
-        for _, row in enumerate(reader):
-            values = list(map(float, row))
-            parameters[int(row[0])] = dict(zip(keys, values))
+class PotentialType(object):
 
-    return parameters
-
-
-def tanh_sinh_quadrature(m, h):
-    xk = tf.Variable(tf.zeros(2 * m))
-    wk = tf.Variable(tf.zeros(2 * m))
-    for i in range(0, 2 * m):
-        k = i - m
-        xk[i].assign(tf.tanh(math.pi / 2 * tf.sinh(k * h)))
-        numerator = h / 2 * math.pi * tf.cosh(k * h)
-        denominator = tf.cosh(math.pi / 2 * tf.sinh(k * h)) ** 2
-        wk[i].assign(numerator / denominator)
-    return xk, wk
-
-
-def riemann_quadrature(m):
-    xk = tf.lin_space(-1., 1., m + 1)
-    wk = xk[1:] - xk[:-1]
-    xk = xk[:-1]
-    return xk, wk
-
-
-class ParameterizedPotential(object):
-
-    def __init__(self, parametrization='lobato', parameters=None):
-
-        self.parametrization = parametrization
-
+    def __init__(self, filename='data/lobato.txt', parameters=None):
+        self.filename = filename
         if parameters is None:
-            self.parameters = load_parameter_file(potentials[parametrization]['default_parameters'])
-        elif isinstance(str, parameters):
-            self.parameters = load_parameter_file(parameters)
-        else:
-            self.parameters = parameters
+            self.parameters = self.load_parameters(self.filename)
 
-    def get_analytic_projection(self, atomic_number):
-        return potentials[self.parametrization]['projected_potential'](self.parameters[atomic_number])
+    def load_parameters(self, filename):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+        parameters = {}
+        with open(path, 'r') as csvfile:
+            reader = csv.reader(csvfile, delimiter=',')
+            next(reader)
+            keys = next(reader)
+            for _, row in enumerate(reader):
+                values = list(map(float, row))
+                parameters[int(row[0])] = dict(zip(keys, values))
+        return parameters
 
-    def get_potential(self, atomic_number):
-        return potentials[self.parametrization]['potential'](self.parameters[atomic_number])
+    def get_projected_potential_function(self, atomic_number):
+        return None
 
-    def get_soft_potential(self, atomic_number, r_cut):
-        return potentials[self.parametrization]['soft_potential'](self.parameters[atomic_number], r_cut)
+    def get_potential_function(self, atomic_number):
+        return None
 
-    def get_cutoff(self, atomic_number, tolerance):
-        v = self.get_potential(atomic_number)
-        return find_cutoff(v, tolerance, xmin=1e-3, xmax=10)
+    def get_soft_potential_function(self, atomic_number, r_cut):
+        return None
 
 
-class Potential(FactoryBase, ParameterizedPotential):
+class LobatoPotential(PotentialType):
 
-    def __init__(self, atoms=None, nslices=None, gpts=None, sampling=None, parametrization='lobato', parameters=None):
+    def __init__(self):
+        PotentialType.__init__(self)
 
-        if not utils.cell_is_rectangular(atoms.get_cell()):
-            raise RuntimeError()
+    def get_potential_function(self, atomic_number):
+        a = [np.pi ** 2 * self.parameters[atomic_number][key_a] / self.parameters[atomic_number][key_b] ** (3 / 2.)
+             for key_a, key_b in zip(('a1', 'a2', 'a3', 'a4', 'a5'), ('b1', 'b2', 'b3', 'b4', 'b5'))]
+        b = [2 * np.pi / tf.sqrt(self.parameters[atomic_number][key]) for key in ('b1', 'b2', 'b3', 'b4', 'b5')]
+
+        def func(r):
+            return (a[0] * (2. / (b[0] * r) + 1) * tf.exp(-b[0] * r) +
+                    a[1] * (2. / (b[1] * r) + 1) * tf.exp(-b[1] * r) +
+                    a[2] * (2. / (b[2] * r) + 1) * tf.exp(-b[2] * r) +
+                    a[3] * (2. / (b[3] * r) + 1) * tf.exp(-b[3] * r) +
+                    a[4] * (2. / (b[4] * r) + 1) * tf.exp(-b[4] * r))
+
+        return func
+
+    def get_soft_potential_function(self, atomic_number, r_cut):
+        a = [np.pi ** 2 * self.parameters[atomic_number][key_a] / self.parameters[atomic_number][key_b] ** (3 / 2.)
+             for key_a, key_b in zip(('a1', 'a2', 'a3', 'a4', 'a5'), ('b1', 'b2', 'b3', 'b4', 'b5'))]
+        b = [2 * np.pi / tf.sqrt(self.parameters[atomic_number][key]) for key in ('b1', 'b2', 'b3', 'b4', 'b5')]
+
+        dvdr_cut = - (a[0] * (2 / (b[0] * r_cut ** 2) + 2 / r_cut + b[0]) * tf.exp(-b[0] * r_cut) +
+                      a[1] * (2 / (b[1] * r_cut ** 2) + 2 / r_cut + b[1]) * tf.exp(-b[1] * r_cut) +
+                      a[2] * (2 / (b[2] * r_cut ** 2) + 2 / r_cut + b[2]) * tf.exp(-b[2] * r_cut) +
+                      a[3] * (2 / (b[3] * r_cut ** 2) + 2 / r_cut + b[3]) * tf.exp(-b[3] * r_cut) +
+                      a[4] * (2 / (b[4] * r_cut ** 2) + 2 / r_cut + b[4]) * tf.exp(-b[4] * r_cut))
+
+        v_cut = (a[0] * (2. / (b[0] * r_cut) + 1) * tf.exp(-b[0] * r_cut) +
+                 a[1] * (2. / (b[1] * r_cut) + 1) * tf.exp(-b[1] * r_cut) +
+                 a[2] * (2. / (b[2] * r_cut) + 1) * tf.exp(-b[2] * r_cut) +
+                 a[3] * (2. / (b[3] * r_cut) + 1) * tf.exp(-b[3] * r_cut) +
+                 a[4] * (2. / (b[4] * r_cut) + 1) * tf.exp(-b[4] * r_cut))
+
+        def func(r):
+            v = (a[0] * (2. / (b[0] * r) + 1) * tf.exp(-b[0] * r) +
+                 a[1] * (2. / (b[1] * r) + 1) * tf.exp(-b[1] * r) +
+                 a[2] * (2. / (b[2] * r) + 1) * tf.exp(-b[2] * r) +
+                 a[3] * (2. / (b[3] * r) + 1) * tf.exp(-b[3] * r) +
+                 a[4] * (2. / (b[4] * r) + 1) * tf.exp(-b[4] * r))
+
+            return v - v_cut - (r - r_cut) * dvdr_cut
+
+        return func
+
+
+# TODO: Find better way of organizing Potential and SlicedPotential
+class Potential(object):
+
+    def __init__(self, extent=None, gpts=None, sampling=None, atoms=None, slice_thickness=.5, num_slices=None,
+                 corner=None, potential_type='lobato', periodic=True, margin=None, quadrature_samples=25,
+                 interp_samples=25, tolerance=1e-2):
+
+        self.grid = Grid(extent=extent, gpts=gpts, sampling=sampling, dimension=2)
+        self.slicing = Grid(extent=None, gpts=num_slices, sampling=slice_thickness, dimension=1)
 
         self.atoms = atoms
 
-        self._nslices = nslices
+        if isinstance(potential_type, str):
+            if potential_type.lower() == 'lobato':
+                self.potential_type = LobatoPotential()
+            else:
+                raise RuntimeError()
+        else:
+            raise RuntimeError()
 
-        FactoryBase.__init__(self, gpts=gpts, extent=self.extent, sampling=sampling)
-        ParameterizedPotential.__init__(self, parametrization=parametrization, parameters=parameters)
+        if corner is None:
+            self.corner = np.zeros(2, dtype=np.float32)
 
-    def slice(self, nslices, tolerance=1e-3, m=20, n=20):
-        return SlicedPotential(self, nslices, tolerance=tolerance, m=m, n=n)
+        self.periodic = periodic
+        self.quadrature_samples = quadrature_samples
+        self.interp_samples = interp_samples
+        self.tolerance = tolerance
 
     @property
-    def box(self):
+    def atoms(self):
+        return self._atoms
+
+    @atoms.setter
+    def atoms(self, value):
+        self._atoms = value
+
+        if value is not None:
+            self.slicing.extent = self.atoms.get_cell()[2, 2]
+
+            if self.grid.extent is None:
+                self.grid.extent = np.diag(self.atoms.get_cell())[:2]
+
+    def slice(self):
         if self.atoms is None:
-            return None
-        return np.diag(self.atoms.get_cell()).astype(np.float32)
+            raise RuntimeError()
+
+        functions = {}
+        cutoffs = {}
+        interp_nodes = {}
+        r_min = min(self.grid.sampling)
+        for number in np.unique(self.atoms.numbers):
+            function = self.potential_type.get_potential_function(number)
+            cutoffs[number] = self._find_cutoff(function, self.tolerance)
+            functions[number] = self.potential_type.get_soft_potential_function(number, cutoffs[number])
+            interp_nodes[number] = self._log_grid(r_min, cutoffs[number], self.interp_samples)
+
+        positions, numbers = self._create_view(self.atoms, self.corner, self.grid.extent, cutoffs)
+        quadrature = self._get_quadrature(self.quadrature_samples)
+        slice_begin = np.arange(0, self.slicing.extent - self.slicing.sampling, self.slicing.sampling)
+        in_slice = self._in_slice(positions, numbers, slice_begin, self.slicing.sampling, cutoffs)
+        margin = self._get_margin(self.slicing.extent, self.grid.sampling, cutoffs, self.periodic)
+
+        return SlicedPotential(positions, numbers, functions, cutoffs, interp_nodes, margin, quadrature, self.grid.gpts,
+                               self.grid.sampling, slice_begin, self.slicing.sampling, in_slice)
+
+    def _get_margin(self, height, sampling, cutoffs, periodic):
+        if periodic:
+            return np.ceil(max(cutoffs.values()) / np.min(sampling)).astype(np.int)
+        else:
+            raise RuntimeError()
+
+    def _in_slice(self, positions, atomic_numbers, slice_begin, slice_thickness, cutoffs):
+        cutoffs = np.array([cutoffs[atomic_number] for atomic_number in atomic_numbers])
+        return np.abs(slice_begin[:, None] + slice_thickness / 2 - positions[:, 2][None, :]) < (
+                cutoffs[None, :] + slice_thickness / 2)
+
+    def _get_quadrature(self, quadrature_samples):
+        quadrature = {}
+        quadrature['xk'] = np.linspace(-1., 1., quadrature_samples + 1)
+        quadrature['wk'] = quadrature['xk'][1:] - quadrature['xk'][:-1]
+        quadrature['xk'] = quadrature['xk'][:-1]
+        return quadrature
+
+    def _log_grid(self, start, stop, n):
+        dt = np.log(stop / start) / (n - 1)
+        return (start * np.exp(dt * np.linspace(0., n - 1, n))).astype(np.float32)
+
+    def _find_cutoff(self, function, tolerance):
+        return np.float32(brentq(lambda x: function(x) - tolerance, 1e-16, 100))
+
+    def _create_view(self, atoms, corner, extent, cutoffs):
+        new_positions = np.zeros((0, 3))
+        new_atomic_numbers = np.zeros((0,), dtype=int)
+        for atomic_number in np.unique(atoms.get_atomic_numbers()):
+            positions = atoms.get_positions()[np.where(atoms.get_atomic_numbers() == atomic_number)[0]]
+            positions[:, :2] = (positions[:, :2] - corner) % np.diag(atoms.get_cell())[:2]
+
+            positions = self._add_margin(positions, np.diag(atoms.get_cell())[:2], extent, cutoffs[atomic_number])
+
+            positions = positions[(positions[:, 0] < (extent[0] + cutoffs[atomic_number])) &
+                                  (positions[:, 1] < (extent[1] + cutoffs[atomic_number])), :]
+
+            new_positions = np.concatenate((new_positions, positions))
+            new_atomic_numbers = np.concatenate((new_atomic_numbers, np.full(len(positions), atomic_number)))
+
+        return new_positions, new_atomic_numbers
+
+    def _add_margin(self, positions, cell, extent, cutoff):
+        for axis in [0, 1]:
+            nrepeat = np.max((int((extent[axis] + 2 * cutoff) // cell[axis]), 1))
+            positions = self._repeat_positions(positions, cell, nrepeat, axis)
+
+            left_positions = positions[positions[:, axis] < (cutoff + extent[axis] - cell[axis] * nrepeat)]
+            left_positions[:, axis] += cell[axis] * nrepeat
+
+            right_positions = positions[(nrepeat * cell[axis] - positions[:, axis]) < cutoff]
+            right_positions[:, axis] -= nrepeat * cell[axis]
+
+            positions = np.concatenate((positions, left_positions, right_positions), axis=0)
+
+        return positions
+
+    def _repeat_positions(self, positions, cell, n, axis):
+        new_positions = positions.copy()
+        for i in range(1, n):
+            new_positions[:, axis] += cell[axis]
+            positions = np.vstack((positions, new_positions))
+        return positions
+
+
+def batch_generator(n_items, max_batch_size):
+    n_batches = (n_items + (-n_items % max_batch_size)) // max_batch_size
+    batch_size = (n_items + (-n_items % n_batches)) // n_batches
+
+    batch_start = 0
+    while 1:
+        batch_end = batch_start + batch_size
+        if batch_end >= n_items:
+            yield batch_start, n_items - batch_end + batch_size
+            break
+        else:
+            yield batch_start, batch_size
+
+        batch_start = batch_end
+
+
+class SlicedPotential(object):
+
+    def __init__(self, positions, numbers, functions, cutoffs, interp_nodes, margin, quadrature, gpts, sampling,
+                 slice_begin, slice_thickness, in_slice):
+        self.positions = positions
+        self.numbers = numbers
+        self.functions = functions
+        self.cutoffs = cutoffs
+        self.interp_nodes = interp_nodes
+        self.margin = margin
+        self.quadrature = quadrature
+        self.gpts = gpts
+        self.sampling = sampling
+        self.slice_begin = slice_begin
+        self.slice_thickness = slice_thickness
+        self.in_slice = in_slice
+
+    def _split_positions(self, indices):
+        split_positions = {}
+        positions = self.positions[indices]
+        numbers = self.numbers[indices]
+        for number in np.unique(numbers):
+            split_positions[number] = tf.convert_to_tensor(positions[np.where(numbers == number)], tf.float32)
+        return split_positions
+
+    def _radials(self, positions, atomic_number, slice_begin, slice_end):
+        a = slice_begin - positions[:, 2]
+        b = slice_end - positions[:, 2]
+        xkab = self.quadrature['xk'][None, :] * ((b - a) / 2)[:, None] + ((a + b) / 2)[:, None]
+        wkab = self.quadrature['wk'][None, :] * ((b - a) / 2)[:, None]
+        r = tf.sqrt(self.interp_nodes[atomic_number][None, None, :] ** 2 + (xkab ** 2)[:, :, None])
+        r = tf.clip_by_value(r, 0, self.interp_nodes[atomic_number][-1])
+        return tf.reduce_sum(self.functions[atomic_number](r) * wkab[:, :, None], axis=1)
 
     @property
-    def extent(self):
-        if self.atoms is None:
-            return None
-        return np.diag(self.atoms.get_cell()[:2]).astype(np.float32)
+    def num_slices(self):
+        return self.in_slice.shape[0]
 
-    @property
-    def entrance_plane(self):
-        return 0.
+    def slice_generator(self):
+        for i in range(self.num_slices):
+            yield self._tensor(i)
 
-    @property
-    def exit_plane(self):
-        return (self.atoms.get_cell()[2, 2]).astype(np.float32)
+    def _tensor(self, i, max_atoms=10):
+        padded_gpts = self.gpts + 2 * self.margin
 
-    @extent.setter
-    def extent(self, _):
-        raise RuntimeError()
+        v = tf.Variable(tf.zeros(np.prod(padded_gpts)))
 
+        slice_begin = self.slice_begin[i]
+        slice_end = self.slice_begin[i] + self.slice_thickness
+        indices = np.where(self.in_slice[i])[0]
 
-class SlicedPotential(FactoryBase):
+        for atomic_number, positions in self._split_positions(indices).items():
+            if positions.shape[0] > 0:
+                block_margin = tf.cast(self.cutoffs[atomic_number] / min(self.sampling), tf.int32)
+                block_size = 2 * block_margin + 1
 
-    def __init__(self, potential, nslices, tolerance=1e-2, m=20, n=20):
+                x = tf.linspace(0., tf.cast(block_size, tf.float32) * self.sampling[0], block_size)[None, :]
+                y = tf.linspace(0., tf.cast(block_size, tf.float32) * self.sampling[1], block_size)[None, :]
 
-        super().__init__(gpts=potential.gpts, extent=potential.extent, sampling=potential.sampling)
+                block_indices = tf.range(0, block_size)[None, :] + \
+                                tf.range(0, block_size)[:, None] * padded_gpts[1]
 
-        self._positions = potential.atoms.get_positions()
-        self._atomic_numbers = potential.atoms.get_atomic_numbers()
-        self._exit_plane = np.float32(potential.atoms.get_cell()[2, 2])
+                radials = self._radials(positions, atomic_number, slice_begin, slice_end)
 
-        self._cutoffs = {}
-        self._functions = {}
-        self._log_grids = {}
-        for atomic_number in np.unique(self.atomic_numbers):
-            self._cutoffs[atomic_number] = potential.get_cutoff(atomic_number, tolerance)
-            self._functions[atomic_number] = potential.get_soft_potential(atomic_number, self._cutoffs[atomic_number])
-            self._log_grids[atomic_number] = utils.log_grid(min(self.sampling),
-                                                            self._cutoffs[atomic_number] * np.float32(2), n)
-
-        self._set_margin(max(self._cutoffs.values()))
-
-
-
-        self._set_slices(nslices, cutoffs)
-
-        self._corner_positions = ((self.positions[:, :2] - cutoffs[:, None]) / self.sampling).astype(int)
-        self._block_positions = self.positions[:, :2] - self._corner_positions * self.sampling
-        self._set_quadrature(m)
-
-    @property
-    def nslices(self):
-        return self._nslices
-
-    @property
-    def positions(self):
-        return self._positions
-
-    @property
-    def atomic_numbers(self):
-        return self._atomic_numbers
-
-    @property
-    def exit_plane(self):
-        return self._exit_plane
-
-    @property
-    def padded_gpts(self):
-        max_blocksize = int(2 * max(self._cutoffs.values()) / min(self.sampling) + 1)
-        return np.array((self.gpts[0] + max_blocksize, self.gpts[1] + max_blocksize))
-
-
-
-    def _set_quadrature(self, m):
-        self._xk, self._wk = riemann_quadrature(m)
-
-    def _set_slices(self, nslices, cutoffs):
-        self._nslices = nslices
-        self._slice_thickness = self.exit_plane / nslices
-
-        slice_centers = np.linspace(self._slice_thickness / 2, self.exit_plane - self._slice_thickness / 2, nslices)
-
-        self._in_slice = (np.abs(slice_centers[:, None] - self.positions[:, 2][None, :]) < cutoffs[None, :])
-
-    def _set_margin(self, margin):
-
-        self._margin = margin
-
-        lattice_vectors = np.zeros((2, 3), dtype=np.float32)
-        np.fill_diagonal(lattice_vectors, self.extent)
-
-        for i in range(2):
-            mask = self.positions[:, i] < margin
-            left_positions = self.positions[mask] + lattice_vectors[i]
-            left_numbers = self.atomic_numbers[mask]
-
-            mask = (self.extent[i] - self.positions[:, i]) < margin
-            right_positions = self.positions[mask] - lattice_vectors[i]
-            right_numbers = self.atomic_numbers[mask]
-
-            self._positions = np.concatenate([self.positions, left_positions, right_positions], axis=0)
-            self._atomic_numbers = np.concatenate([self.atomic_numbers, left_numbers, right_numbers], axis=0)
-
-    @property
-    def slice_thickness(self):
-        return self._slice_thickness
-
-    def slice_natoms(self, i, atomic_number):
-        return len(self.slice_indices(i, atomic_number))
-
-    def slice_entrance_plane(self, i):
-        return i * self.slice_thickness
-
-    def slice_exit_plane(self, i):
-        return self.slice_entrance_plane(i) + self.slice_thickness
-
-    def slice_positions(self, i, atomic_number=None):
-        return self.positions[self.slice_indices(i, atomic_number)]
-
-    def blocksize(self, atomic_number):
-        return np.float32(2 * self._cutoffs[atomic_number] / min(self.sampling) + 1)
-
-    def radial_potential(self, i, positions, atomic_number):
-        a = self.slice_entrance_plane(i) - positions[:, 2]
-        b = self.slice_exit_plane(i) - positions[:, 2]
-        xkab = self._xk[None, :] * ((b - a) / 2)[:, None] + ((a + b) / 2)[:, None]
-        wkab = self._wk[None, :] * ((b - a) / 2)[:, None]
-        r_radial = tf.sqrt(self._log_grids[atomic_number][None, None, :] ** 2 + (xkab ** 2)[:, :, None])
-        r_radial = tf.clip_by_value(r_radial, 0, self._cutoffs[atomic_number])
-        v_radial = tf.reduce_sum(self._functions[atomic_number](r_radial) * wkab[:, :, None], axis=1)
-
-        return v_radial
-
-    def slice_tensor(self, i, max_atoms):
-        v = tf.Variable(tf.zeros(np.prod(self.padded_gpts)))
-
-        for atomic_number in np.unique(self.atomic_numbers):
-            if self.slice_natoms(i, atomic_number) > 0:
-                positions = np.float32(self.slice_positions(i, atomic_number))
-
-                pixel_margin = np.int32(self._cutoffs[atomic_number] / min(self.sampling))
-                blocksize = 2 * pixel_margin + 1
-
-                x = tf.linspace(0., blocksize * self.sampling[0], blocksize)[None, :]
-                y = tf.linspace(0., blocksize * self.sampling[1], blocksize)[None, :]
-
-                block_indices = tf.range(0, blocksize)[None, :] + tf.range(0, blocksize)[:, None] * self.padded_gpts[1]
-
-                for start, size in utils.batch_generator(len(positions), max_atoms):
+                for start, size in batch_generator(positions.shape[0].value, max_atoms):
                     batch_positions = tf.slice(positions, [start, 0], [size, -1])
+
                     corner_positions = tf.cast(tf.round(batch_positions[:, :2] / self.sampling),
-                                               tf.int32) - pixel_margin
-                    block_positions = batch_positions[:, :2] - tf.cast(corner_positions, tf.float32) * self.sampling
+                                               tf.int32) - block_margin + self.margin
 
-                    r_radial = tf.tile(self._log_grids[atomic_number][None, :], (size, 1))
+                    block_positions = (batch_positions[:, :2] + self.sampling * self.margin
+                                       - self.sampling * tf.cast(corner_positions, tf.float32))
 
-                    v_radial = self.radial_potential(i, batch_positions, atomic_number)
+                    batch_radials = tf.slice(radials, [start, 0], [size, -1])
 
                     r_interp = tf.reshape(tf.sqrt(((x - block_positions[:, 0][:, None]) ** 2)[:, :, None] +
                                                   ((y - block_positions[:, 1][:, None]) ** 2)[:, None, :]), (size, -1))
 
+                    r_interp = tf.clip_by_value(r_interp, 0., tf.reduce_max(self.interp_nodes[atomic_number]))
+
                     v_interp = tf.Variable(tf.reshape(
-                        tf.contrib.image.interpolate_spline(r_radial[:, :, None], v_radial[:, :, None],
-                                                            r_interp[:, :, None], 1), (-1,)))
+                        tf.contrib.image.interpolate_spline(
+                            tf.tile(self.interp_nodes[atomic_number][None, :], (size, 1))[:, :, None],
+                            batch_radials[:, :, None],
+                            r_interp[:, :, None], 1), (-1,)))
 
-                    corner_indices = corner_positions[:, 0] * self.padded_gpts[1] + corner_positions[:, 1]
-
+                    corner_indices = corner_positions[:, 0] * padded_gpts[1] + corner_positions[:, 1]
                     indices = tf.reshape(corner_indices[:, None, None] + block_indices[None, :, :], (-1, 1))
 
                     tf.scatter_nd_add(v, indices, v_interp)
 
-        v = tf.reshape(v, self.padded_gpts)
-        v = tf.slice(v, (0, 0), self.gpts)
-        return v / utils.kappa
-
-    def __getitem__(self, i):
-        return PotentialSlice(self, i)
+        v = tf.reshape(v, padded_gpts)
+        v = tf.slice(v, (self.margin, self.margin), self.gpts)
+        return v  # / utils.kappa
 
 
-class PotentialSlice(object):
+def plane2axes(plane):
+    axes = ()
+    for axis in list(plane):
+        if axis == 'x': axes += (0,)
+        if axis == 'y': axes += (1,)
+        if axis == 'z': axes += (2,)
+    return axes
 
-    def __init__(self, sliced_potential, index):
-        self._sliced_potential = sliced_potential
-        self.index = index
 
-    @property
-    def sliced_potential(self):
-        return self._sliced_potential
+def display_atoms(source, plane, slice_index=None, scale=100, ax=None, colors=None):
+    positions = source.positions
+    numbers = source.numbers
 
-    @property
-    def indices(self):
-        return self.sliced_potential.slice_indices(self.index)
+    if slice_index is not None:
+        positions = positions[source.in_slice[slice_index]]
+        numbers = numbers[source.in_slice[slice_index]]
 
-    @property
-    def positions(self):
-        return self.sliced_potential._positions[self.indices]
+    axes = plane2axes(plane)
+    positions = positions[:, axes]
+    if colors is None:
+        colors = cpk_colors[numbers]
+    sizes = covalent_radii[numbers]
 
-    @property
-    def atomic_numbers(self):
-        return self.sliced_potential._atomic_numbers[self.indices]
+    if ax is None:
+        fig, ax = plt.subplots()
 
-    @property
-    def entrance_plane(self):
-        return self.index * self.thickness
+    box = np.zeros((2, 5))
+    if isinstance(source, Atoms):
+        box[0, 2:4] += np.diag(source.get_cell())[axes[0]]
+        box[1, 1:3] += np.diag(source.get_cell())[axes[1]]
+    elif isinstance(source, SlicedPotential):
+        extent = source.gpts * source.sampling
+        box[0, 2:4] += np.array([extent[0], extent[1], source.slice_begin[-1] + source.slice_thickness])[axes[0]]
+        box[1, 1:3] += np.array([extent[0], extent[1], source.slice_begin[-1] + source.slice_thickness])[axes[1]]
 
-    @property
-    def exit_plane(self):
-        return self.entrance_plane + self.thickness
+    ax.plot(*box, 'k-')
 
-    @property
-    def thickness(self):
-        return self.sliced_potential._slice_thickness
+    if isinstance(source, SlicedPotential):
+        extent = source.gpts * source.sampling
+        box = np.zeros((2, 5))
+        for i in range(len(source.in_slice)):
+            box[0, :] = np.array([0., 0., source.slice_begin[i]])[axes[0]]
+            box[1, :] = np.array([0., 0., source.slice_begin[i]])[axes[1]]
+            box[0, 2:4] += np.array([extent[0], extent[1], source.slice_thickness])[axes[0]]
+            box[1, 1:3] += np.array([extent[0], extent[1], source.slice_thickness])[axes[1]]
+            ax.plot(*box, 'k-', linewidth=1)
 
-    @property
-    def box(self):
-        return np.hstack((self.sliced_potential.extent, self.thickness))
-
-    @property
-    def extent(self):
-        return self.sliced_potential.extent
-
-    def tensor(self, max_atoms=10):
-        return self.sliced_potential.slice_tensor(self.index, max_atoms)
-
-    def show_atoms(self, **kwargs):
-        plotutils.show_atoms(self, **kwargs)
-
-    def show(self, **kwargs):
-        image = self.tensor().numpy()
-        extent = [0, self.extent[0], 0, self.extent[1]]
-        plotutils.show_image(image, extent=extent, **kwargs)
+    ax.scatter(*positions.T, c=colors, s=scale * sizes)
+    ax.axis('equal')
+    plt.show()

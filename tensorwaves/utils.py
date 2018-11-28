@@ -74,9 +74,6 @@ def wrapped_slice(tensor, begin, size):
     return tf.slice(tensor, [0] * len(begin), size)
 
 
-
-
-
 class ProgressBar(object):
 
     def __init__(self, num_iter, units='', description='', update_every=5, disable=False):

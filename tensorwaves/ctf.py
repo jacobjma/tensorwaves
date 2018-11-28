@@ -1,37 +1,22 @@
 from collections import OrderedDict
 from math import pi
 
-import ipywidgets
 import tensorflow as tf
-import traitlets
-
-from tensorwaves import bases
-from tensorwaves import utils
+from tensorwaves.bases import TensorFactory
+from tensorwaves.utils import complex_exponential
 
 
-def fft2d_shift(tensor):
-    shift = [tensor.shape[ax].value // 2 for ax in (0, 1)]
-    return tf.manip.roll(tensor, shift, [0, 1])
+class Aperture(TensorFactory):
 
+    def __init__(self, extent=None, gpts=None, sampling=None, energy=None, radius=.1, rolloff=0.):
+        super().__init__(extent=extent, gpts=gpts, sampling=sampling, energy=energy)
 
-class Aperture(bases.TensorFactory):
-    description = traitlets.Unicode(default_value='Aperture')
-    accelerator = traitlets.Instance(bases.Accelerator)
-    space = traitlets.Instance(bases.Space)
+        self.radius = radius
+        self.rolloff = rolloff
 
-    radius = traitlets.Float(default_value=.1)
-    rolloff = traitlets.Float(default_value=.1)
-
-    def __init__(self, extent=None, gpts=None, sampling=None, energy=None, space='fourier'):
-        super().__init__(extent=extent, gpts=gpts, sampling=sampling)
-
-        self.accelerator = bases.parse_accelerator(energy)
-        self.space = bases.parse_space(space)
-
-    def _tensor(self):
-        wavelength = utils.energy2wavelength(self.accelerator.energy)
-        kx = utils.fftfreq(self.x_grid.gpts, self.x_grid.sampling)
-        ky = utils.fftfreq(self.y_grid.gpts, self.y_grid.sampling)
+    def get_tensor(self):
+        wavelength = self.accelerator.wavelength
+        kx, ky = self.grid.fftfreq()
 
         alpha_x = kx * wavelength
         alpha_y = ky * wavelength
@@ -42,223 +27,199 @@ class Aperture(bases.TensorFactory):
         if self.rolloff > 0.:
             tensor = .5 * (1 + tf.cos(pi * (alpha - self.radius) / self.rolloff))
             tensor *= tf.cast(alpha < self.radius + self.rolloff, tf.float32)
-            tensor = tf.where(alpha > self.radius, tensor, tf.ones((self.x_grid.gpts, self.y_grid.gpts)))
+            tensor = tf.where(alpha > self.radius, tensor, tf.ones((self.grid.gpts, self.grid.gpts)))
         else:
             tensor = tf.cast(alpha < self.radius, tf.float32)
 
-        return tensor[None, :, :]
-
-    def _build_widgets(self):
-        widgets = OrderedDict()
-        widgets['radius'] = ipywidgets.BoundedFloatText(description='Radius', value=self.radius, min=0)
-        widgets['rolloff'] = ipywidgets.BoundedFloatText(description='Rolloff', value=self.rolloff, min=0)
-        return widgets
+        return tf.cast(tensor[None, :, :], tf.complex64)
 
 
-class CTF(bases.TensorFactory):
-    description = traitlets.Unicode(default_value='CTF')
+def link_property(symbol):
+    def getter(self):
+        return getattr(self, symbol)
 
-    accelerator = traitlets.Instance(bases.Accelerator)
-    space = traitlets.Instance(bases.Space)
+    def setter(self, value):
+        setattr(self, symbol, value)
 
-    def __init__(self, extent=None, gpts=None, sampling=None, energy=None, space='fourier'):
-        super().__init__(extent=extent, gpts=gpts, sampling=sampling)
+    return property(getter, setter)
 
-        self.accelerator = bases.parse_accelerator(energy)
-        self.space = bases.parse_space(space)
 
-    # def __init__(self, parametrization='polar', parameters=None, energy=None, gpts=None, extent=None, sampling=None,
-    #              **kwargs):
-    #     super().__init__(energy=energy, gpts=gpts, extent=extent, sampling=sampling)
-    #
-    #     if parametrization is 'polar':
-    #         symbols = polar_symbols
-    #         aliases = polar_aliases
-    #
-    #     elif parametrization is 'cartesian':
-    #         symbols = cartesian_symbols
-    #         aliases = cartesian_aliases
-    #
-    #     else:
-    #         raise ValueError()
-    #
-    #     self._parametrization = parametrization
-    #
-    #     if parameters is None:
-    #         parameters = {}
-    #
-    #     self._parameters = dict(zip(symbols, [0.] * len(symbols)))
-    #     self._parameters.update(parameters)
-    #     self._parameters.update(**kwargs)
-    #
-    #     for alias, symbol in zip(aliases, symbols):
-    #         if (alias is not None):
-    #             if alias not in self._parameters.keys():
-    #                 self._parameters[alias] = self._parameters[symbol]
-    #             else:
-    #                 self._parameters[symbol] = self._parameters[alias]
-    #
-    #     self._func = polar_ctf(self._parameters)
-#
-#
-#
-#     @property
-#     def parameters(self):
-#         return self._parameters
-#
-#     def __repr__(self):
-#         return 'contrast transfer function\n' + super().__repr__()
-#
-#     def show_radial(self, phi=0, k_max=2, n=1024, ax=None):
-#         if ax is None:
-#             ax = plt.subplot()
-#
-#         wavelength = utils.energy2wavelength(self._energy)
-#
-#         k = np.linspace(0, k_max, n)
-#         alpha = wavelength * k
-#         chi = 2 * pi / wavelength * self._func(alpha, alpha ** 2, phi)
-#
-#         ax.plot(k, np.sin(chi))
-#         ax.set_xlabel('k [1 / Angstrom]')
-#
-#         return ax
-#
-#     def _tensor(self):
-#         wavelength = utils.energy2wavelength(self.energy)
-#         kx, ky = self.fftfreq()
-#
-#         alpha_x = kx * wavelength
-#         alpha_y = ky * wavelength
-#
-#         alpha2 = alpha_x[:, None] ** 2 + alpha_y[None, :] ** 2
-#         alpha = tf.sqrt(alpha2)
-#         alpha_y, alpha_x = tf.meshgrid(alpha_y, alpha_x)
-#
-#         if self._parametrization == 'polar':
-#             phi = tf.atan2(alpha_x, alpha_y)
-#             chi = self._func(alpha, alpha2, phi)
-#         else:
-#             raise NotImplementedError()
-#
-#         return utils.complex_exponential(2 * pi / wavelength * chi)[None, :, :]
-#
-#     def build(self):
-#         return TensorBase(tensor=self._tensor(), energy=self.energy, extent=self.extent, sampling=self.sampling)
-#
-#
-# polar_symbols = ('C10', 'C12', 'phi12',
-#                  'C21', 'phi21', 'C23', 'phi23',
-#                  'C30', 'C32', 'phi32', 'C34', 'phi34',
-#                  'C41', 'phi41', 'C43', 'phi43', 'C45', 'phi45',
-#                  'C50', 'C52', 'phi52', 'C54', 'phi54', 'C56', 'phi56')
-#
-# # todo: alias for higher order aberrations
-# polar_aliases = ('defocus', 'astig_mag', 'astig_angle',
-#                  'coma_mag', 'coma_angle', 'astig_mag_2', 'astig_angle_2',
-#                  'Cs', None, None, None, None,
-#                  None, None, None, None, None, None,
-#                  'C5', None, None, None, None, None, None)
-#
-#
-# def symmetric_ctf(p):
-#     if p['C10'] != 0.:
-#         chi = lambda a, a2: 1 / 2. * a2 * p['C10']
-#     if p['C30'] != 0.:
-#         chi_old1 = chi  # todo: better way to avoid recursion?
-#         chi = lambda a, a2: chi_old1(a, a2) + 1 / 4. * a2 ** 2 * p['C30']
-#     if p['C50'] != 0.:
-#         chi_old2 = chi
-#         chi = lambda a, a2: chi_old2(a, a2) + 1 / 6. * a2 ** 3 * p['C50']
-#     return chi
-#
-#
-# def polar_ctf(p):
-#     # todo: this can be more optimized, although the gains will be small
-#     if any([p[key] != 0. for key in ('C10', 'C12', 'phi12')]):
-#         chi = lambda a, a2, b: (1 / 2. * a2 *
-#                                 (p['C10'] +
-#                                  p['C12'] * tf.cos(2. * (b - p['phi12']))))
-#     if any([p[key] != 0. for key in ('C21', 'phi21', 'C23', 'phi23')]):
-#         chi_old1 = chi
-#         chi = lambda a, a2, b: (chi_old1(a, a2, b) + 1 / 3. * a2 * a *
-#                                 (p['C21'] * tf.cos(b - p['phi21']) +
-#                                  p['C23'] * tf.cos(3. * (b - p['phi23']))))
-#     if any([p[key] != 0. for key in ('C30', 'C32', 'phi32', 'C34', 'phi34')]):
-#         chi_old2 = chi
-#         chi = lambda a, a2, b: (chi_old2(a, a2, b) + 1 / 4. * a2 ** 2 *
-#                                 (p['C30'] +
-#                                  p['C32'] * tf.cos(2. * (b - p['phi32'])) +
-#                                  p['C34'] * tf.cos(4. * (b - p['phi34']))))
-#     if any([p[key] != 0. for key in ('C41', 'phi41', 'C43', 'phi43', 'C45', 'phi41')]):
-#         chi_old3 = chi
-#         chi = lambda a, a2, b: (chi_old3(a, a2, b) + 1 / 5. * a2 ** 2 * a *
-#                                 (p['C41'] * tf.cos((b - p['phi41'])) +
-#                                  p['C43'] * tf.cos(3. * (b - p['phi43'])) +
-#                                  p['C45'] * tf.cos(5. * (b - p['phi41']))))
-#     if any([p[key] != 0. for key in ('C50', 'C52', 'phi52', 'C54', 'phi54', 'C56', 'phi56')]):
-#         chi_old4 = chi
-#         chi = lambda a, a2, b: (chi_old4(a, a2, b) + 1 / 6. * a2 ** 3 *
-#                                 (p['C50'] +
-#                                  p['C52'] * tf.cos(2. * (b - p['phi52'])) +
-#                                  p['C54'] * tf.cos(4. * (b - p['phi54'])) +
-#                                  p['C56'] * tf.cos(6. * (b - p['phi56']))))
-#     try:
-#         return chi
-#     except UnboundLocalError:
-#         return lambda a, a2, b: tf.zeros(a.shape)
-#
-#
-# cartesian_symbols = ('C10', 'C12a', 'C12b',
-#                      'C21a', 'C21b', 'C23a', 'C23b',
-#                      'C30', 'C32a', 'C32b', 'C34a', 'C34b')
-#
-# cartesian_aliases = ('defocus', 'astig_x', 'astig_y',
-#                      'coma_x', 'coma_y', 'astig_x_2', 'astig_y_2',
-#                      'Cs', None, None, None, None)
-#
-#
-# def cartesian_ctf(p):
-#     # todo: implement 4th and 5th order
-#     if any([p[key] != 0. for key in ('C10', 'C12a', 'C12b')]):
-#         chi = lambda ax, ay, ax2, ay2, a2: (1 / 2. * (p['C10'] * a2 +
-#                                                       p['C12a'] * (ax2 - ay2)) + p['C12b'] * ax * ay)
-#     if any([p[key] != 0. for key in ('C21a', 'C21b', 'C23a', 'C23b')]):
-#         chi_old1 = chi
-#         chi = (lambda ax, ay, ax2, ay2, a2: chi_old1(ax, ay, ax2, ay2, a2) +
-#                                             1 / 3. * (a2 * (p['C21a'] * ax + p['C21b'] * ay) +
-#                                                       p['C23a'] * ax * (ax2 - 3 * ay2) +
-#                                                       p['C23b'] * ay * (ay2 - 3 * ax2)))
-#     if any([p[key] != 0. for key in ('C30', 'C32a', 'C32b', 'C34a', 'C34b')]):
-#         chi_old2 = chi
-#         chi = (lambda ax, ay, ax2, ay2, a2: chi_old2(ax, ay, ax2, ay2, a2) +
-#                                             1 / 4. * (p['C30'] * a2 ** 2 +
-#                                                       p['C32a'] * (ax2 ** 2 - ay2 ** 2) +
-#                                                       2 * p['C32b'] * ax * ay * a2 +
-#                                                       p['C34a'] * (ax2 ** 2 - 6 * ax2 * ay2 + ay2 ** 2) +
-#                                                       4 * p['C34b'] * (ax * ay2 * ay - ax2 * ax * ay)))
-#     return chi
-#
-#
-# def polar2cartesian(polar):
-#     cartesian = {}
-#     cartesian['C10'] = polar['C10']
-#     cartesian['C12a'] = - polar['C12'] * tf.cos(2 * polar['phi12'])
-#     cartesian['C12b'] = polar['C12'] * tf.cos(pi / 2 - 2 * polar['phi12'])
-#     cartesian['C21a'] = polar['C21'] * tf.cos(pi / 2 - polar['phi21'])
-#     cartesian['C21b'] = polar['C21'] * tf.cos(polar['phi21'])
-#     cartesian['C23a'] = polar['C23'] * tf.cos(3 * pi / 2. - 3 * polar['phi23'])
-#     cartesian['C23b'] = polar['C23'] * tf.cos(3 * polar['phi23'])
-#     cartesian['C30'] = polar['C30']
-#     cartesian['C32a'] = - polar['C32'] * tf.cos(2 * polar['phi32'])
-#     cartesian['C32b'] = polar['C32'] * tf.cos(pi / 2 - 2 * polar['phi32'])
-#     cartesian['C34a'] = polar['C34'] * tf.cos(-4 * polar['phi34'])
-#     K = tf.sqrt(3 + tf.sqrt(8.))
-#     cartesian['C34b'] = 1 / 4. * (1 + K ** 2) ** 2 / (K ** 3 - K) * polar['C34'] * tf.cos(
-#         4 * tf.atan(1 / K) - 4 * polar['phi34'])
-#     return cartesian
-#
-#
-# def cartesian2polar(polar):
-#     # todo: implement this function
-#     raise NotImplementedError()
+class ParameterizedCTF(object):
+
+    def __init__(self, symbols, aliases):
+
+        for symbol in symbols:
+            setattr(ParameterizedCTF, symbol, 0.)
+
+        for alias, symbol in zip(aliases, symbols):
+            if alias is not None:
+                setattr(ParameterizedCTF, alias, link_property(symbol))
+
+
+class PolarCTF(ParameterizedCTF):
+
+    def __init__(self):
+        symbols = ('C10', 'C12', 'phi12',
+                   'C21', 'phi21', 'C23', 'phi23',
+                   'C30', 'C32', 'phi32', 'C34', 'phi34',
+                   'C41', 'phi41', 'C43', 'phi43', 'C45', 'phi45',
+                   'C50', 'C52', 'phi52', 'C54', 'phi54', 'C56', 'phi56')
+
+        aliases = ('defocus', 'astig_mag', 'astig_angle',
+                   'coma', 'coma_angle', 'astig_mag_2', 'astig_angle_2',
+                   'Cs', None, None, None, None,
+                   None, None, None, None, None, None,
+                   'C5', None, None, None, None, None, None)
+
+        ParameterizedCTF.__init__(self, symbols, aliases)
+
+    def get_function(self):
+        if any([getattr(self, symbol) != 0. for symbol in ('C10', 'C12', 'phi12')]):
+            chi = lambda a, a2, b: (1 / 2. * a2 *
+                                    (self.C10 +
+                                     self.C12 * tf.cos(2. * (b - self.phi12))))
+        if any([getattr(self, symbol) != 0. for symbol in ('C21', 'phi21', 'C23', 'phi23')]):
+            chi_old1 = chi
+            chi = lambda a, a2, b: (chi_old1(a, a2, b) + 1 / 3. * a2 * a *
+                                    (self.C21 * tf.cos(b - self.phi21) +
+                                     self.C23 * tf.cos(3. * (b - self.phi23))))
+        if any([getattr(self, symbol) != 0. for symbol in ('C30', 'C32', 'phi32', 'C34', 'phi34')]):
+            chi_old2 = chi
+            chi = lambda a, a2, b: (chi_old2(a, a2, b) + 1 / 4. * a2 ** 2 *
+                                    (self.C30 +
+                                     self.C32 * tf.cos(2. * (b - self.phi32)) +
+                                     self.C34 * tf.cos(4. * (b - self.phi34))))
+        if any([getattr(self, symbol) != 0. for symbol in ('C41', 'phi41', 'C43', 'phi43', 'C45', 'phi41')]):
+            chi_old3 = chi
+            chi = lambda a, a2, b: (chi_old3(a, a2, b) + 1 / 5. * a2 ** 2 * a *
+                                    (self.C41 * tf.cos((b - self.phi41)) +
+                                     self.C43 * tf.cos(3. * (b - self.phi43)) +
+                                     self.C45 * tf.cos(5. * (b - self.phi41))))
+        if any([getattr(self, symbol) != 0. for symbol in ('C50', 'C52', 'phi52', 'C54', 'phi54', 'C56', 'phi56')]):
+            chi_old4 = chi
+            chi = lambda a, a2, b: (chi_old4(a, a2, b) + 1 / 6. * a2 ** 3 *
+                                    (self.C50 +
+                                     self.C52 * tf.cos(2. * (b - self.phi52)) +
+                                     self.C54 * tf.cos(4. * (b - self.phi54)) +
+                                     self.C56 * tf.cos(6. * (b - self.phi56))))
+        return chi
+
+
+class SymmetricCTF(ParameterizedCTF):
+
+    def __init__(self):
+        symbols = ('C10', 'C30', 'C50')
+        aliases = ('defocus', 'Cs', 'C5')
+
+        ParameterizedCTF.__init__(self, symbols, aliases)
+
+    def get_function(self):
+        if self.C10 != 0.:
+            chi = lambda a, a2: 1 / 2. * a2 * p['C10']
+        if self.C30 != 0.:
+            chi_old1 = chi
+            chi = lambda a, a2: chi_old1(a, a2) + 1 / 4. * a2 ** 2 * p['C30']
+        if self.C50 != 0.:
+            chi_old2 = chi
+            chi = lambda a, a2: chi_old2(a, a2) + 1 / 6. * a2 ** 3 * p['C50']
+        return chi
+
+
+class CartesianCTF(ParameterizedCTF):
+
+    def __init__(self):
+        symbols = ('C10', 'C12a', 'C12b',
+                   'C21a', 'C21b', 'C23a', 'C23b',
+                   'C30', 'C32a', 'C32b', 'C34a', 'C34b')
+
+        aliases = ('defocus', 'astig_x', 'astig_y',
+                   'coma_x', 'coma_y', 'astig_x_2', 'astig_y_2',
+                   'Cs', None, None, None, None)
+
+        ParameterizedCTF.__init__(self, symbols, aliases)
+
+    def get_function(self):
+
+        # todo: implement 4th and 5th order
+        if any([getattr(self, symbol) != 0. for symbol in ('C10', 'C12a', 'C12b')]):
+            chi = lambda ax, ay, ax2, ay2, a2: (1 / 2. * (self.C10 * a2 +
+                                                          self.C12a * (ax2 - ay2)) + self.C12b * ax * ay)
+        if any([getattr(self, symbol) != 0. for symbol in ('C21a', 'C21b', 'C23a', 'C23b')]):
+            chi_old1 = chi
+            chi = (lambda ax, ay, ax2, ay2, a2: chi_old1(ax, ay, ax2, ay2, a2) +
+                                                1 / 3. * (a2 * (self.C21a * ax + self.C21b * ay) +
+                                                          self.C23a * ax * (ax2 - 3 * ay2) +
+                                                          self.C23b * ay * (ay2 - 3 * ax2)))
+        if any([getattr(self, symbol) != 0. for symbol in ('C30', 'C32a', 'C32b', 'C34a', 'C34b')]):
+            chi_old2 = chi
+            chi = (lambda ax, ay, ax2, ay2, a2: chi_old2(ax, ay, ax2, ay2, a2) +
+                                                1 / 4. * (self.C30 * a2 ** 2 +
+                                                          self.C32a * (ax2 ** 2 - ay2 ** 2) +
+                                                          2 * self.C32b * ax * ay * a2 +
+                                                          self.C34a * (ax2 ** 2 - 6 * ax2 * ay2 + ay2 ** 2) +
+                                                          4 * self.C34b * (ax * ay2 * ay - ax2 * ax * ay)))
+        return chi
+
+
+class CTF(TensorFactory):
+
+    def __init__(self, extent=None, gpts=None, sampling=None, energy=None, parametrization='polar', **kwargs):
+        super().__init__(extent=extent, gpts=gpts, sampling=sampling, energy=energy)
+
+        if parametrization.lower() == 'polar':
+            self.parametrization = PolarCTF()
+        elif parametrization.lower() == 'cartesian':
+            raise NotImplementedError()
+        else:
+            raise RuntimeError()
+
+        for symbol, value in kwargs.items():
+            if not hasattr(self.parametrization, symbol):
+                raise RuntimeError()
+
+            setattr(self.parametrization, symbol, value)
+
+    def _line_data(self, phi=0, kmax=1):
+        wavelength = self.accelerator.wavelength
+
+        k = tf.linspace(0., kmax, 1024)
+        alpha = wavelength * k
+
+        chi = 2 * pi / wavelength * self.parametrization.get_function()(alpha, alpha ** 2, phi)
+
+        return k, complex_exponential(chi)
+
+    def get_tensor(self):
+        wavelength = self.accelerator.wavelength
+        kx, ky = self.grid.fftfreq()
+
+        alpha_x = kx * wavelength
+        alpha_y = ky * wavelength
+
+        alpha2 = alpha_x[:, None] ** 2 + alpha_y[None, :] ** 2
+        alpha = tf.sqrt(alpha2)
+        alpha_y, alpha_x = tf.meshgrid(alpha_y, alpha_x)
+
+        phi = tf.atan2(alpha_x, alpha_y)
+        chi = self.parametrization.get_function()(alpha, alpha2, phi)
+
+        return complex_exponential(2 * pi / wavelength * chi)[None, :, :]
+
+
+def polar2cartesian(polar):
+    cartesian = {}
+    cartesian['C10'] = polar['C10']
+    cartesian['C12a'] = - polar['C12'] * tf.cos(2 * polar['phi12'])
+    cartesian['C12b'] = polar['C12'] * tf.cos(pi / 2 - 2 * polar['phi12'])
+    cartesian['C21a'] = polar['C21'] * tf.cos(pi / 2 - polar['phi21'])
+    cartesian['C21b'] = polar['C21'] * tf.cos(polar['phi21'])
+    cartesian['C23a'] = polar['C23'] * tf.cos(3 * pi / 2. - 3 * polar['phi23'])
+    cartesian['C23b'] = polar['C23'] * tf.cos(3 * polar['phi23'])
+    cartesian['C30'] = polar['C30']
+    cartesian['C32a'] = - polar['C32'] * tf.cos(2 * polar['phi32'])
+    cartesian['C32b'] = polar['C32'] * tf.cos(pi / 2 - 2 * polar['phi32'])
+    cartesian['C34a'] = polar['C34'] * tf.cos(-4 * polar['phi34'])
+    K = tf.sqrt(3 + tf.sqrt(8.))
+    cartesian['C34b'] = 1 / 4. * (1 + K ** 2) ** 2 / (K ** 3 - K) * polar['C34'] * tf.cos(
+        4 * tf.atan(1 / K) - 4 * polar['phi34'])
+    return cartesian

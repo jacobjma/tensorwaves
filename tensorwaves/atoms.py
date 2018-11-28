@@ -2,101 +2,70 @@ import matplotlib.pyplot as plt
 import numpy as np
 from ase.data import covalent_radii
 from ase.data.colors import cpk_colors
+from ase import Atoms
 
 from tensorwaves import utils
+from tensorwaves.display import Display
+import traitlets
+import traittypes
+import bqplot
 
 
-def axis2idx(axis):
-    if axis == 'x':
-        return 0
-    if axis == 'y':
-        return 1
-    if axis == 'z':
-        return 2
+class AtomsView(traitlets.HasTraits):
+    cutoffs = traitlets.Dict()
+    start = traittypes.Array()
+    size = traittypes.Array()
+    atoms = traitlets.Instance(Atoms)
 
+    positions = traittypes.Array(read_only=True)
+    atomic_numbers = traittypes.Array(read_only=True)
+    origin = traittypes.Array(read_only=True)
 
-def display_atoms(atoms, plane='xy', ax=None, scale=1, linewidth=2, edgecolor='k', **kwargs):
-    if ax is None:
-        ax = plt.subplot()
+    slices = traitlets.Int(allow_none=True, default_value=None)
+    slice_thickness = traitlets.Float(allow_none=True, default_value=None)
+    in_slice = traittypes.Array(read_only=True)
 
-    axes_idx = [axis2idx(axis) for axis in list(plane)]
+    @property
+    def box(self):
+        return np.hstack((self.size, [self.cell[2]]))
 
-    positions = atoms.positions[:, axes_idx]
-    atomic_numbers = atoms.atomic_numbers
+    @property
+    def cell(self):
+        return np.diag(self.atoms.get_cell())
 
-    c = cpk_colors[atomic_numbers]
-    s = scale * covalent_radii[atomic_numbers]
+    @traitlets.default('origin')
+    def _default_origin(self):
+        return np.array([0., 0., 0.])
 
-    scatter = ax.scatter(*positions.T, c=c, s=s, linewidth=linewidth, edgecolor=edgecolor, **kwargs)
-    ax.axis('equal')
+    @traitlets.default('start')
+    def _default_start(self):
+        return np.array([0., 0.])
 
-    rect_x = np.full(5, atoms.origin[axes_idx[0]])
-    rect_x[2:4] += atoms.box[axes_idx[0]]
-    rect_y = np.full(5, atoms.origin[axes_idx[1]])
-    rect_y[1:3] += atoms.box[axes_idx[1]]
-    ax.plot(rect_x, rect_y, 'k', linewidth=1.5)
+    @traitlets.default('size')
+    def _default_size(self):
+        return np.diag(self.atoms.get_cell())[:2]
 
-    if axes_idx[1] == 2:
-        ax.invert_yaxis()
+    @traitlets.observe('atoms')
+    def _observe_atoms(self, change):
+        self._new_view()
 
-    return ax, scatter
-
-
-class AtomsView(object):
-
-    def __init__(self, atoms):
-
-        self.set_atoms(atoms)
-
-    atoms = property(lambda self: self._atoms)
-    positions = property(lambda self: self._positions)
-    atomic_numbers = property(lambda self: self._atomic_numbers)
-    box = property(lambda self: self._box)
-    origin = property(lambda self: np.array([0., 0., 0.]))
-    cutoffs = property(lambda self: self._cutoffs)
-    n_slices = property(lambda self: self._n_slices)
-    slice_thickness = property(lambda self: self.box[2] / self.n_slices)
-
-    def set_atoms(self, atoms):
-
-        if not utils.cell_is_rectangular(atoms.get_cell()):
-            raise RuntimeError()
-
-        self._atoms = atoms
-        self._positions = None
-        self._atomic_numbers = None
-        self._box = None
-        self._cutoffs = None
-        self._n_slices = None
-        self._in_slice = None
-
-    def create_view(self, cutoffs, begin=None, size=None):
-        if begin is None:
-            begin = np.array([0., 0.])
-
-        cell = np.diag(self._atoms.get_cell()).copy()
-
-        if size is None:
-            size = cell[:2]
-
+    def _new_view(self):
         new_positions = np.zeros((0, 3))
         new_atomic_numbers = np.zeros((0,), dtype=int)
-        for atomic_number in np.unique(self._atoms.get_atomic_numbers()):
-            positions = self._atoms.get_positions()[np.where(self._atoms.get_atomic_numbers() == atomic_number)[0]]
-            positions[:, :2] = (positions[:, :2] - begin) % cell[:2]
+        for atomic_number in np.unique(self.atoms.get_atomic_numbers()):
+            positions = self.atoms.get_positions()[np.where(self.atoms.get_atomic_numbers() == atomic_number)[0]]
+            positions[:, :2] = (positions[:, :2] - self.start) % self.cell[:2]
 
-            positions = self._add_margin(positions, cell, size, cutoffs[atomic_number])
+            positions = self._add_margin(positions, self.cell, self.size, self.cutoffs[atomic_number])
 
-            positions = positions[(positions[:, 0] < (size[0] + cutoffs[atomic_number])) &
-                                  (positions[:, 1] < (size[1] + cutoffs[atomic_number])), :]
+            positions = positions[(positions[:, 0] < (self.size[0] + self.cutoffs[atomic_number])) &
+                                  (positions[:, 1] < (self.size[1] + self.cutoffs[atomic_number])), :]
 
             new_positions = np.concatenate((new_positions, positions))
             new_atomic_numbers = np.concatenate((new_atomic_numbers, np.full(len(positions), atomic_number)))
 
-        self._cutoffs = cutoffs
-        self._positions = new_positions
-        self._atomic_numbers = new_atomic_numbers
-        self._box = np.array([size[0], size[1], cell[2]])
+        self.set_trait('positions', new_positions)
+        self.set_trait('atomic_numbers', new_atomic_numbers)
 
     def _add_margin(self, positions, cell, size, cutoff):
         for axis in [0, 1]:
@@ -120,52 +89,48 @@ class AtomsView(object):
             positions = np.vstack((positions, new_positions))
         return positions
 
-    def slice(self, n_slices=None, slice_thickness=None):
-        if (n_slices is None) & (slice_thickness is not None):
-            self._n_slices = np.int(np.ceil(self.box[2] / slice_thickness))
-        elif n_slices is not None:
-            self._n_slices = n_slices
-        else:
-            raise RuntimeError()
+    @traitlets.observe('slice_thickness')
+    def _observe_slice_thickness(self, change):
+        self.slices = int(np.ceil(self.box[2] / change['new']))
 
-        slice_centers = np.linspace(self.slice_thickness / 2, self.box[2] - self.slice_thickness / 2, self.n_slices)
+    @traitlets.observe('slices')
+    def _observe_slices(self, change):
+        self.slice_thickness = self.box[2] / change['new']
+        self._slice()
 
+    def _slice(self):
+        slice_centers = np.linspace(self.slice_thickness / 2, self.box[2] - self.slice_thickness / 2, self.slices)
         cutoffs = np.array([self.cutoffs[atomic_number] for atomic_number in self.atomic_numbers])
-        self._in_slice = (np.abs(slice_centers[:, None] - self.positions[:, 2][None, :]) < (
+        self.set_trait('in_slice', np.abs(slice_centers[:, None] - self.positions[:, 2][None, :]) < (
                 cutoffs[None, :] + self.slice_thickness / 2))
 
     def slice_indices(self, i, atomic_number=None):
         if atomic_number is None:
-            return np.where(self._in_slice[i])[0]
+            return np.where(self.in_slice[i])[0]
         else:
-            return np.where(self._in_slice[i] & (self._atomic_numbers == atomic_number))[0]
+            return np.where(self.in_slice[i] & (self.atomic_numbers == atomic_number))[0]
 
     def __getitem__(self, i):
-        if i < -self.n_slices or i >= self.n_slices:
+        if i < -self.slices or i >= self.slices:
             raise IndexError('slice index out of range')
 
-        return AtomsSlice(self, i)
+        return AtomsSlice(view=self, index=i)
 
     def __iter__(self):
-        for i in range(self.n_slices):
+        for i in range(self.slices):
             yield self[i]
 
-    def display(self, plane='xy', ax=None, scale=1):
-        return display_atoms(self, plane=plane, ax=ax, scale=scale)
+    def display(self, plane='xy'):
+        return ProjectedAtomsDisplay(view=self, plane=plane).show()
 
 
-class AtomsSlice(object):
-
-    def __init__(self, atoms_view, index):
-        self._index = index
-        self._atoms_view = atoms_view
-
-    index = property(lambda self: self._index)
-    atoms_view = property(lambda self: self._atoms_view)
+class AtomsSlice(traitlets.HasTraits):
+    view = traitlets.Instance(AtomsView)
+    index = traitlets.Int()
 
     @property
     def thickness(self):
-        return self.atoms_view.slice_thickness
+        return self.view.slice_thickness
 
     @property
     def origin(self):
@@ -173,15 +138,60 @@ class AtomsSlice(object):
 
     @property
     def box(self):
-        return np.array([self.atoms_view.box[0], self.atoms_view.box[1], self.thickness])
+        return np.array([self.view.box[0], self.view.box[1], self.thickness])
 
     @property
     def positions(self):
-        return self.atoms_view.positions[self.atoms_view.slice_indices(self.index)]
+        return self.view.positions[self.view.slice_indices(self.index)]
 
     @property
     def atomic_numbers(self):
-        return self.atoms_view.atomic_numbers[self.atoms_view.slice_indices(self.index)]
+        return self.view.atomic_numbers[self.view.slice_indices(self.index)]
 
-    def display(self, plane='xy', ax=None, scale=1):
-        return display_atoms(self, plane=plane, ax=ax, scale=scale)
+    def display(self, plane='xy'):
+        return ProjectedAtomsDisplay(view=self, plane=plane).show()
+
+
+class ProjectedAtomsDisplay(Display):
+    view = traitlets.Union([traitlets.Instance(Po), traitlets.Instance(AtomsSlice)])
+    plane = traitlets.Union([traitlets.Tuple(default_value=(0, 1)), traitlets.Unicode()])
+
+    @traitlets.validate('plane')
+    def _validate_plane(self, proposal):
+        if isinstance(proposal['value'], str):
+            value = ()
+            for axis in list(proposal['value']):
+                if axis == 'x': value += (0,)
+                if axis == 'y': value += (1,)
+                if axis == 'z': value += (2,)
+            return value
+        else:
+            return proposal['value']
+
+    def _get_positions(self):
+        return self.view.positions[:, self.plane].T
+
+    def _get_colors(self):
+        colors = cpk_colors[self.view.atomic_numbers]
+        return list(np.apply_along_axis(lambda x: "#{:02x}{:02x}{:02x}".format(*x), 1, (colors * 255).astype(np.int)))
+
+    def _get_atomic_sizes(self):
+        return covalent_radii[self.view.atomic_numbers]
+
+    def _get_box(self):
+        box = np.zeros((2, 5))
+        box[0, :] = self.view.origin[self.plane[0]]
+        box[1, :] = self.view.origin[self.plane[1]]
+        box[0, 2:4] += self.view.box[self.plane[0]]
+        box[1, 1:3] += self.view.box[self.plane[1]]
+        return box
+
+    @traitlets.default('marks')
+    def _default_marks(self):
+        x, y = self._get_positions()
+        atoms = bqplot.Scatter(x=x, y=y, scales={'x': self.x_scale, 'y': self.y_scale},
+                               colors=self._get_colors(), stroke_width=1.5, stroke='black')
+
+        x, y = self._get_box()
+        box = bqplot.Lines(x=x, y=y, scales={'x': self.x_scale, 'y': self.y_scale}, colors=['black'])
+        return [atoms, box]
