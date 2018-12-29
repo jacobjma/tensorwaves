@@ -1,41 +1,29 @@
-import IPython.display
-import bokeh.io
-import bokeh.layouts
-import bokeh.models
-import ipywidgets as widgets
-import tensorflow as tf
-import traitlets as traits
-from ase.data import covalent_radii
-from ase.data.colors import cpk_colors
-from bokeh.plotting import figure
-
-from tensorwaves import utils
+import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+import numpy as np
+import matplotlib.gridspec as gridspec
 
 
-def display_space_tensor(tensor, space, display_space):
-    if display_space is 'direct':
-        if space == 'fourier':
-            tensor = utils.fft_shift(tf.ifft2d(tf.cast(tensor, tf.complex64)), (0, 1))
-
-    elif display_space is 'fourier':
-        if space is 'fourier':
-            tensor = utils.fft_shift(tensor, (0, 1))
-        else:
-            tensor = utils.fft_shift(tf.fft2d(tf.cast(tensor, tf.complex64)), (0, 1))
-
+def convert_complex(array, mode='magnitude'):
+    if mode.lower()[:3] == 'mag':
+        return np.abs(array) ** 2
+    elif mode.lower()[:3] == 'int':
+        return np.abs(array) ** 2
+    elif mode.lower()[:3] == 'rea':
+        return np.real(array)
+    elif mode.lower()[:3] == 'ima':
+        return np.imag(array)
     else:
         raise RuntimeError()
 
-    return tensor
 
-
-def display_space_range(extent, shape, display_space):
-    if display_space == 'direct':
+def plot_range(extent, gpts, display_space):
+    if display_space.lower() == 'direct':
         x_range = [0, extent[0]]
         y_range = [0, extent[1]]
 
-    elif display_space == 'fourier':
-        extent = [1 / extent[0] * shape[0], 1 / extent[1] * shape[1]]
+    elif display_space.lower() == 'fourier':
+        extent = [1 / extent[0] * gpts[0], 1 / extent[1] * gpts[1]]
         x_range = [-extent[0] / 2, extent[0] / 2]
         y_range = [-extent[1] / 2, extent[1] / 2]
 
@@ -45,167 +33,95 @@ def display_space_range(extent, shape, display_space):
     return x_range, y_range
 
 
-def display_space_labels(display_space):
-    if display_space == 'direct':
-        x_label = 'x [Angstrom]'
-        y_label = 'y [Angstrom]'
-
-    elif display_space == 'fourier':
-        x_label = 'kx [1/Angstrom]'
-        y_label = 'ky [1/Angstrom]'
+def plot_array(array, space, display_space):
+    if display_space.lower() == 'direct':
+        if space.lower() == 'fourier':
+            array = np.fft.fftshift(np.fft.ifft2(array))
+    elif display_space.lower() == 'fourier':
+        if space.lower() == 'fourier':
+            array = np.fft.fftshift(array)
+        else:
+            array = np.fft.fftshift(np.fft.fft2(array))
     else:
         raise RuntimeError()
 
-    return x_label, y_label
+    return array
 
 
-class InteractiveDisplay(traits.HasTraits):
-    display_space = traits.Unicode(default_value='direct')
-    mode = traits.Unicode(default_value='magnitude')
-    update = traits.Unicode(default_value='manual')
-    plot_width = traits.Int(default_value=400)
-    plot_height = traits.Int(default_value=400)
-    i = traits.Int(default_value=0)
-
-    @traits.validate('display_space')
-    def _validate_space(self, proposal):
-        if proposal['value'].lower() not in ('direct', 'fourier'):
-            raise traits.TraitError()
-        else:
-            return proposal['value']
-
-    @traits.validate('mode')
-    def _validate_mode(self, proposal):
-        if proposal['value'].lower() not in ('magnitude', 'real', 'imaginary'):
-            raise traits.TraitError()
-        else:
-            return proposal['value']
-
-    def new_figure(self):
-        x_range, y_range = display_space_range(self.instance.factory_base.extent, self.instance.factory_base.gpts,
-                                               self.display_space)
-
-        self.figure = figure(plot_width=self.plot_width, plot_height=self.plot_height, x_range=x_range, y_range=y_range)
-
-    def get_image_data(self):
-        tensor = display_space_tensor(self.instance._tensor()[self.i],
-                                      self.instance.factory_base.space,
-                                      self.display_space)
-        return utils.convert_complex(tensor, self.mode).numpy().T
-
-    def new_image(self):
-        image_data = self.get_image_data()
-
-        x_range, y_range = display_space_range(self.instance.factory_base.extent, self.instance.factory_base.gpts,
-                                               self.display_space)
-
-        self.image = self.figure.image([image_data], x=x_range[0], y=y_range[0],
-                                       dw=x_range[1] - x_range[0],
-                                       dh=y_range[1] - y_range[0], palette='Viridis256')
-
-    def update_image(self, _):
-        self.image.data_source.data['image'] = [self.get_image_data()]
-        x_range, y_range = display_space_range(self.instance.factory_base.extent, self.instance.factory_base.gpts,
-                                               self.display_space)
-
-        self.image.glyph.x = x_range[0]
-        self.image.glyph.y = y_range[0]
-        self.image.glyph.dw = x_range[1] - x_range[0]
-        self.image.glyph.dh = y_range[1] - y_range[0]
-
-        bokeh.io.push_notebook()
-
-    def update_range(self, _):
-        x_range, y_range = display_space_range(self.instance.factory_base.extent, self.instance.factory_base.gpts,
-                                               self.display_space)
-
-        self.figure.x_range.start = x_range[0]
-        self.figure.x_range.end = x_range[1]
-        self.figure.y_range.start = y_range[0]
-        self.figure.y_range.end = y_range[1]
-        self.figure.x_range.reset_start = x_range[0]
-        self.figure.x_range.reset_end = x_range[1]
-        self.figure.y_range.reset_start = y_range[0]
-        self.figure.y_range.reset_end = y_range[1]
-
-        bokeh.io.push_notebook()
-
-    def display(self, instance):
-
-        self.instance = instance
-        self.new_figure()
-        self.new_image()
-        self.update_range(None)
-
-        bokeh.io.show(self.figure, notebook_handle=True)
-
-        self.observe(self.update_image, 'mode')
-        self.observe(self.update_image, 'display_space')
-        self.observe(self.update_range, 'display_space')
-
-        if self.update is 'manual':
-            update = widgets.Button(description='Update image')
-            update.on_click(self.update_image)
-            IPython.display.display(update)
-        else:
-            self.instance.grid.x_grid.observe(self.update_image, ('gpts', 'sampling', 'extent'))
-            self.instance.grid.y_grid.observe(self.update_image, ('gpts', 'sampling', 'extent'))
-            self.instance.accelerator.observe(self.update_image, 'energy')
-            self.instance.calculation_space.observe(self.update_image, 'space')
-            self.observe(self.update_image, 'display_space')
-            self.observe(self.update_image, 'mode')
-
-    def interact(self):
-        mode = widgets.Dropdown(options=('magnitude', 'real', 'imaginary'), description='mode:', disabled=False)
-        space = widgets.Dropdown(options=('fourier', 'direct'), description='display space:', disabled=False)
-        reset = widgets.Button(description="Fit to range")
-        traits.link((self, 'mode'), (mode, 'value'))
-        traits.link((self, 'display_space'), (space, 'value'))
-        reset.on_click(self.update_range)
-
-        return widgets.HBox((mode, space, reset))
+def plot_labels(display_space):
+    if display_space.lower() == 'direct':
+        labels = ['x [Angstrom]', 'y [Angstrom]']
+    elif display_space.lower() == 'fourier':
+        labels = ['kx [1 / Angstrom]', 'ky [1 / Angstrom]']
+    else:
+        raise RuntimeError()
+    return labels
 
 
-def axis2idx(axis):
-    if axis == 'x':
-        return 0
-    if axis == 'y':
-        return 1
-    if axis == 'z':
-        return 2
+def show_array(array, extent, space, display_space='direct', mode='magnitude', colorbar=True, vmin=None,
+               vmax=None, num_cols=4, **kwargs):
+    num_images = len(array)
+    num_cols = min(num_cols, num_images)
+    num_rows = (num_images + num_cols - 1) // num_cols
+
+    x_range, y_range = plot_range(extent, array.shape[1:], display_space)
+
+    image_aspect = (y_range[-1] - y_range[0]) / (x_range[-1] - x_range[0])
+    fig_aspect = num_rows / num_cols * image_aspect
+
+    fig = plt.figure(figsize=(3 * num_cols + .5, 3 * fig_aspect * num_cols))
+    gs = gridspec.GridSpec(num_rows + 1, num_cols + 2,
+                           height_ratios=num_rows * [1] + [0.0001],
+                           width_ratios=[0.0001] + num_cols * [1] + [.05])
+
+    images = convert_complex(plot_array(array, space, display_space), mode=mode)
+
+    if vmin is None:
+        vmin = np.min(images)
+
+    if vmax is None:
+        vmax = np.max(images)
+
+    for i in range(len(images)):
+        ax = plt.subplot(gs[i // num_cols, (i % num_cols) + 1])
+
+        mapable = ax.imshow(images[i].T, extent=x_range + y_range, origin='lower', vmin=vmin, vmax=vmax)
+
+        # if i % num_cols:
+        #    ax.set_yticks([])
+
+        # if (i // num_cols) != (num_rows - 1):
+        #    ax.set_xticks([])
+
+    labels = plot_labels(display_space)
+
+    bottom = gridspec.GridSpecFromSubplotSpec(1, 1, subplot_spec=gs[-1, 1:-1])
+    ax = plt.subplot(bottom[0, 0], frameon=False)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_xlabel(labels[0])
+
+    left = gridspec.GridSpecFromSubplotSpec(1, 1, subplot_spec=gs[:-1, 0])
+    ax = plt.subplot(left[0, 0], frameon=False)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_ylabel(labels[1])
 
 
-def show_atoms(atoms, plane='xy', ax=None, scale=1, linewidth=2, edgecolor='k', show_margin=True, **kwargs):
+
+    right = gridspec.GridSpecFromSubplotSpec(3, 1, subplot_spec=gs[:-1, -1],
+                                             height_ratios=[(num_rows - 1)/2, 1, (num_rows - 1)/2])
+    ax = plt.subplot(right[1, 0])
+    plt.colorbar(mapable, cax=ax, orientation='vertical', label='', )
+
+    #gs.tight_layout(fig)
+
+
+def show_line(x, y, mode, ax=None, **kwargs):
     if ax is None:
         ax = plt.subplot()
 
-    axes_idx = [axis2idx(axis) for axis in list(plane)]
-
-    positions = atoms.positions[:, axes_idx]
-    atomic_numbers = atoms.atomic_numbers
-
-    c = cpk_colors[atomic_numbers]
-    s = scale * covalent_radii[atomic_numbers]
-
-    positions = positions
-    ax.scatter(*positions.T, c=c, s=s, linewidth=linewidth, edgecolor=edgecolor, **kwargs)
-    # if show_margin:
-    #    ax.scatter(*positions.T[len(atoms):], c=c, s=s, linewidth=linewidth, edgecolor=edgecolor, **kwargs)
-
-    ax.axis('equal')
-
-    a = atoms.origin[axes_idx[0]]
-    b = atoms.origin[axes_idx[1]]
-    la = atoms.box[axes_idx[0]]
-    lb = atoms.box[axes_idx[1]]
-    ax.plot([a, a, a + la, a + la, a],
-            [b, b + lb, b + lb, b, b], 'k',
-            linewidth=1.5)
-
-    if axes_idx[1] == 2:
-        ax.invert_yaxis()
-
-    return ax
+    ax.plot(x, convert_complex(y, mode=mode), **kwargs)
 
 
 def add_colorbar(ax, mapable, position='right', size='5%', pad=0.05, **kwargs):
@@ -213,6 +129,8 @@ def add_colorbar(ax, mapable, position='right', size='5%', pad=0.05, **kwargs):
         orientation = 'vertical'
     elif position in ['top', 'bottom']:
         orientation = 'horizontal'
+    else:
+        raise RuntimeError()
 
     divider = make_axes_locatable(ax)
     cax = divider.append_axes(position, size=size, pad=pad)

@@ -17,6 +17,25 @@ energy2sigma = lambda x: (
         units._hplanck * units.s * units.J) ** 2)
 
 
+def freq2angles(kx, ky, wavelength, return_squared_norm=False, return_azimuth=False):
+    alpha_x = kx * wavelength
+    alpha_y = ky * wavelength
+
+    if return_squared_norm & return_azimuth:
+        return (alpha_x, alpha_y, alpha_x[:, None] ** 2 + alpha_y[None, :] ** 2,
+                tf.atan2(alpha_x[:, None], alpha_y[None, :]))
+
+    elif return_squared_norm:
+        return alpha_x, alpha_y, alpha_x[:, None] ** 2 + alpha_y[None, :] ** 2
+
+    elif return_azimuth:
+
+        return alpha_x, alpha_y, tf.atan2(alpha_x[:, None], alpha_y[None, :])
+    else:
+
+        return alpha_x, alpha_y
+
+
 def batch_generator(n_items, max_batch_size):
     n_batches = (n_items + (-n_items % max_batch_size)) // max_batch_size
     batch_size = (n_items + (-n_items % n_batches)) // n_batches
