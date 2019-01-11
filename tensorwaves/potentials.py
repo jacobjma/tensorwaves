@@ -8,7 +8,7 @@ from ase.data import covalent_radii
 from ase.data.colors import cpk_colors
 from scipy.optimize import brentq
 
-from tensorwaves.bases import Tensor, HasData, HasGrid
+from tensorwaves.bases import Tensor, HasData, Showable
 from tensorwaves.utils import kappa, batch_generator
 
 
@@ -129,7 +129,7 @@ class LobatoPotential(ParameterizedPotential):
         return func
 
     def _create_projected_function(self, atomic_number):
-        
+        pass
 
 
 class KirklandPotential(ParameterizedPotential):
@@ -175,26 +175,25 @@ class Quadrature(object):
         return self._num_nodes
 
     def get_integrals(self, function, a, b, nodes):
-
         xkab = self._quadrature['xk'][None, :] * ((b - a) / 2)[:, None] + ((a + b) / 2)[:, None]
         wkab = self._quadrature['wk'][None, :] * ((b - a) / 2)[:, None]
-        #print(a, b, xkab, wkab)
+
         r = tf.sqrt(nodes[None, None, :] ** 2 + (xkab ** 2)[:, :, None])
         r = tf.clip_by_value(r, 0, nodes[-1])
         return tf.reduce_sum(function(r) * wkab[:, :, None], axis=1)
 
 
-class Potential(HasData, HasGrid):
+class Potential(HasData, Showable):
 
     def __init__(self, atoms=None, origin=None, extent=None, gpts=None, sampling=None, slice_thickness=.5,
-                 parametrization='lobato', periodic=True, method='splines', atoms_per_loop=10, save_data=True,
-                 grid=None):
+                 parametrization='lobato', periodic=True, method='splines', atoms_per_loop=10, tolerance=1e-2,
+                 save_data=True, grid=None):
         HasData.__init__(self, save_data=save_data)
-        HasGrid.__init__(self, extent=extent, gpts=gpts, sampling=sampling, space='direct', grid=grid)
+        Showable.__init__(self, extent=extent, gpts=gpts, sampling=sampling, grid=grid, space='direct')
 
         if isinstance(parametrization, str):
             if parametrization.lower() == 'lobato':
-                self._parametrization = LobatoPotential()
+                self._parametrization = LobatoPotential(tolerance=tolerance)
             else:
                 raise RuntimeError()
         else:
@@ -321,7 +320,7 @@ class Potential(HasData, HasGrid):
             yield self._create_tensor(i)
 
     def get_tensor(self, i=0):
-        return Tensor(self._create_tensor(i), extent=self.grid.extent, space=self.grid.space)
+        return Tensor(self._create_tensor(i), extent=self.grid.extent, space=self.space)
 
     def _create_tensor(self, i=None):
         margin = (self.get_margin() / min(self.grid.sampling)).astype(np.int32)
@@ -371,13 +370,6 @@ class Potential(HasData, HasGrid):
                                                   ((y - block_positions[:, 1][:, None]) ** 2)[:, None, :]), (size, -1))
 
                     r_interp = tf.clip_by_value(r_interp, 0., tf.reduce_max(nodes))
-                    # print(r_interp)
-                    # import matplotlib.pyplot as plt
-                    # plt.plot(r_interp[0,:].numpy())
-                    # plt.plot(batch_radials[0].numpy())
-                    # plt.show()
-
-                    # sss
 
                     v_interp = tf.Variable(tf.reshape(
                         tf.contrib.image.interpolate_spline(
@@ -387,6 +379,7 @@ class Potential(HasData, HasGrid):
 
                     corner_indices = corner_positions[:, 0] * padded_gpts[1] + corner_positions[:, 1]
                     indices = tf.reshape(corner_indices[:, None, None] + block_indices[None, :, :], (-1, 1))
+                    indices = tf.clip_by_value(indices, 0, v.shape[0] - 1)
 
                     tf.scatter_nd_add(v, indices, v_interp)
 
@@ -395,8 +388,12 @@ class Potential(HasData, HasGrid):
 
         return v[None, :, :] / kappa
 
-    def show(self, i=0, mode='magnitude', space='direct', color_scale='linear', **kwargs):
-        self.get_tensor(i).show(mode=mode, space=space, **kwargs)
+    def get_showable_tensor(self, i=0):
+        return self.get_tensor(i=i)
+
+    #def show(self, i=0, mode='magnitude', space='direct', color_scale='linear', **kwargs):
+
+        #self.get_tensor(i).show(mode=mode, space=space, **kwargs)
 
     def show_atoms(self, plane='xy', i=None):
 

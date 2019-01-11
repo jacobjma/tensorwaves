@@ -7,7 +7,7 @@ import ipywidgets
 import numpy as np
 from bqplot import LinearScale, Axis, Figure, PanZoom
 
-from tensorwaves.bases import Observer, Observable, notifying_property
+from tensorwaves.bases import HasData, notifying_property
 from tensorwaves.plotutils import convert_complex, plot_array, plot_range
 
 
@@ -19,7 +19,17 @@ def link_widget(o, widget, property_name):
     return callback
 
 
-class InteractiveDisplay(Observer, Observable):
+def link_widget_component(widget, o, property_name, component):
+    def callback(change):
+        value = getattr(o, property_name).copy()
+        value[component] = change['new']
+        setattr(o, property_name, value)
+
+    widget.observe(callback, 'value')
+    return callback
+
+
+class InteractiveDisplay(HasData):
 
     def __init__(self, showable, space='direct', mode='magnitude', auto_update=False, margin=None):
         self._showable = showable
@@ -41,8 +51,7 @@ class InteractiveDisplay(Observer, Observable):
 
         self._last_update = None
 
-        Observer.__init__(self)
-        Observable.__init__(self)
+        HasData.__init__(self, save_data=True)
 
     space = notifying_property('_space')
     mode = notifying_property('_mode')
@@ -53,7 +62,6 @@ class InteractiveDisplay(Observer, Observable):
             self._updating = True
             if observable is not self:
                 self.update_data()
-
             self.update()
             self._updating = False
 
@@ -92,6 +100,9 @@ class ImageDisplay(InteractiveDisplay):
         self.update_coordinates()
         self.update_labels()
 
+        for observed in showable._observing:
+            observed.register_observer(self)
+
         self._showable.register_observer(self)
         self.register_observer(self)
 
@@ -105,19 +116,19 @@ class ImageDisplay(InteractiveDisplay):
 
     def update_data(self):
         t = time.time()
-        self._tensor = self._showable.get_tensor()
+        self._data = self._showable.get_showable_tensor()
         self._last_update = time.time() - t
 
     def update_marks(self, message=None):
         self.figure.marks[0].image = self._get_image()
 
     def update_coordinates(self, message=None):
-        x_range, y_range = plot_range(self._tensor.grid.extent, self._tensor.grid.gpts, self.space)
+        x_range, y_range = plot_range(self._data.grid.extent, self._data.grid.gpts, self.space)
         self.figure.marks[0].x = x_range
         self.figure.marks[0].y = y_range
 
     def update_range(self, message=None):
-        x_range, y_range = plot_range(self._tensor.grid.extent, self._tensor.grid.gpts, self.space)
+        x_range, y_range = plot_range(self._data.grid.extent, self._data.grid.gpts, self.space)
         self.scales['x'].min, self.scales['x'].max = map(float, x_range)
         self.scales['y'].min, self.scales['y'].max = map(float, y_range)
 
@@ -133,8 +144,8 @@ class ImageDisplay(InteractiveDisplay):
         self._info_widget.value = 'Last update: {:.5f} s'.format(self._last_update)
 
     def _get_image(self):
-        array = self._tensor._get_show_data()[0]
-        array = convert_complex(plot_array(array, self._tensor.grid.space, self._space), mode=self._mode)
+        array = self._data.numpy()[0]
+        array = convert_complex(plot_array(array, self._data.space, self._space), mode=self._mode)
 
         if self._color_scale == 'log':
             sign = np.sign(array)
@@ -189,9 +200,3 @@ class ImageDisplay(InteractiveDisplay):
         box = ipywidgets.Box([self.figure, widget_box],
                              layout=ipywidgets.Layout(display='flex', align_items='flex-start'))
         return box
-
-#
-
-#
-
-#

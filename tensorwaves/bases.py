@@ -5,7 +5,7 @@ import tensorflow as tf
 
 from tensorwaves.plotutils import show_array
 from tensorwaves.utils import energy2wavelength, energy2sigma, linspace_no_endpoint, fftfreq, freq2angles, \
-    fourier_propagator, complex_exponential
+    fourier_propagator, complex_exponential, bar
 
 
 class Observable(object):
@@ -17,8 +17,8 @@ class Observable(object):
 
     def notify_observers(self, message, exclude_self=False):
         for observer in self._observers:
-            if not ((observer is self) & exclude_self):
-                observer.notify(self, message)
+            # if not ((observer is self) & exclude_self):
+            observer.notify(self, message)
 
 
 class Observer(object):
@@ -62,6 +62,8 @@ class Updatable(Observer, Observable):
         self._up_to_date = False
         self._forward = True
 
+        self._observing = []
+
     @property
     def up_to_date(self):
         return self._up_to_date
@@ -73,10 +75,6 @@ class Updatable(Observer, Observable):
     def notify(self, observable, message):
         if message['change']:
             self.up_to_date = False
-            self.notify_observers(message, exclude_self=True)
-
-            # if self._mediator:
-            #    self._mediator.notify(self, message)
 
 
 class HasData(Updatable):
@@ -169,7 +167,7 @@ class GridException(Exception):
 
 class Grid(Observable):
 
-    def __init__(self, extent=None, gpts=None, sampling=None, space='direct'):
+    def __init__(self, extent=None, gpts=None, sampling=None):
         Observable.__init__(self)
 
         if isinstance(extent, GridProperty):
@@ -186,8 +184,6 @@ class Grid(Observable):
             self._sampling = sampling
         else:
             self._sampling = GridProperty(sampling, np.float32, locked=False)
-
-        self._space = space
 
         if self.extent is None:
             if not ((self.gpts is None) | (self.sampling is None)):
@@ -252,10 +248,6 @@ class Grid(Observable):
 
         self.notify_observers({'name': 'sampling', 'old': old, 'new': value, 'change': np.any(old != value)})
 
-    @property
-    def space(self):
-        return self._space
-
     def check_is_defined(self):
         if ((self.extent is None) | (self.gpts is None) | (self.sampling is None)):
             raise GridException()  # ('grid is not defined')
@@ -282,8 +274,7 @@ class Grid(Observable):
         return value
 
     def copy(self):
-        return self.__class__(extent=self._extent.copy(), gpts=self._gpts.copy(), sampling=self._sampling.copy(),
-                              space=self._space)
+        return self.__class__(extent=self._extent.copy(), gpts=self._gpts.copy(), sampling=self._sampling.copy())
 
     def is_compatible(self, other):
         pass
@@ -316,9 +307,9 @@ class Grid(Observable):
 
 class HasGrid(object):
 
-    def __init__(self, extent=None, gpts=None, sampling=None, space=None, grid=None):
+    def __init__(self, extent=None, gpts=None, sampling=None, grid=None):
         if grid is None:
-            grid = Grid(extent=extent, gpts=gpts, sampling=sampling, space=space)
+            grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
 
         self._grid = grid
 
@@ -371,15 +362,49 @@ class HasAccelerator(object):
         return self._accelerator
 
 
-class Tensor(HasGrid):
+class Showable(HasGrid):
 
-    def __init__(self, tensor, extent=None, sampling=None, space=None, grid=None):
+    def __init__(self, extent=None, gpts=None, sampling=None, grid=None, space=None):
+        self._space = space
+
+        HasGrid.__init__(self, extent=extent, gpts=gpts, sampling=sampling, grid=grid)
+
+    @property
+    def space(self):
+        return self._space
+
+    def get_showable_tensor(self, i=0):
+        raise NotImplementedError()
+
+    def show(self, i=None, space='direct', mode='magnitude', scale='linear', fig_scale=1, **kwargs):
+        array = self.get_showable_tensor(i).numpy()
+
+        # if i is not None:
+        #    array = array[i][None]
+
+        show_array(array, extent=self.grid.extent, space=self.space, display_space=space, mode=mode, scale=scale,
+                   fig_scale=fig_scale, **kwargs)
+
+
+class ShowableWithEnergy(Showable, HasAccelerator):
+
+    def __init__(self, extent=None, gpts=None, sampling=None, grid=None, space=None, energy=None, accelerator=None):
+        Showable.__init__(self, extent=extent, gpts=gpts, sampling=sampling, grid=grid, space=space)
+        HasAccelerator.__init__(self, energy=energy, accelerator=accelerator)
+
+    def match(self, other):
+        other.grid.match(self.grid)
+        other.accelerator.match(self.accelerator)
+
+
+class Tensor(Showable):
+
+    def __init__(self, tensor, extent=None, sampling=None, grid=None, space=None):
         self._tensor = tensor
 
         gpts = GridProperty(lambda: np.array([dim.value for dim in tensor.shape[1:]]), dtype=np.int32, locked=True)
 
-        HasGrid.__init__(self, extent=extent, gpts=gpts, sampling=sampling, space=space, grid=grid)
-        # Observable.__init__(self)
+        Showable.__init__(self, extent=extent, gpts=gpts, sampling=sampling, grid=grid, space=space)
 
     def check_is_defined(self):
         self._grid.check_is_defined()
@@ -390,29 +415,34 @@ class Tensor(HasGrid):
     def numpy(self):
         return self._tensor.numpy()
 
-    def show(self, i=None, space='direct', mode='magnitude', **kwargs):
-        array = self.numpy()
-        if i is not None:
-            array = array[i][None]
+    def get_showable_tensor(self, i=None):
+        return self
 
-        show_array(array, extent=self.grid.extent, space=self.grid.space, display_space=space, mode=mode, **kwargs)
+    def saveable_dict(self):
+        return {'type': 'tensor', 'tensor': self._tensor.copy(), 'extent': self.grid.extent, 'space': self.space}
 
     def copy(self):
         return self.__class__(tensor=tf.identity(self._tensor), grid=self.grid.copy())
 
 
-class TensorWaves(Tensor, HasAccelerator):
+class TensorWithEnergy(Tensor, HasAccelerator):
+
+    def __init__(self, tensor, extent=None, sampling=None, grid=None, space=None, energy=None, accelerator=None):
+        Tensor.__init__(self, tensor, extent=extent, sampling=sampling, space=space, grid=grid)
+        HasAccelerator.__init__(self, energy=energy, accelerator=accelerator)
+
+
+class TensorWaves(TensorWithEnergy):
 
     def __init__(self, tensor, extent=None, sampling=None, energy=None, grid=None, accelerator=None):
-        Tensor.__init__(self, tensor, extent=extent, sampling=sampling, space='direct', grid=grid)
-
-        HasAccelerator.__init__(self, energy=energy, accelerator=accelerator)
+        TensorWithEnergy.__init__(self, tensor, extent=extent, sampling=sampling, grid=grid, space='direct',
+                                  energy=energy,
+                                  accelerator=accelerator)
 
     def get_tensor(self):
         return self
 
     def multislice(self, potential, in_place=False):
-
         self.grid.match(potential.grid)
 
         if in_place:
@@ -420,9 +450,10 @@ class TensorWaves(Tensor, HasAccelerator):
         else:
             wave = self.copy()
 
-        for potential_slice in potential.slice_generator():
+        for potential_slice in bar(potential.slice_generator(), potential.num_slices, description='Multislice'):
             wave._tensor = wave._tensor * complex_exponential(wave.accelerator.interaction_parameter *
                                                               potential_slice)
+
             wave.propagate(potential.slice_thickness)
 
         return wave
@@ -438,38 +469,40 @@ class TensorWaves(Tensor, HasAccelerator):
     def _fourier_convolution(self, propagator):
         return tf.ifft2d(tf.fft2d(self._tensor) * propagator)
 
-    def _get_show_data(self):
-        return self.get_tensor().numpy()
+    def apply_ctf(self, ctf=None, in_place=False, aperture_radius=np.inf, aperture_rolloff=0., **kwargs):
+        if ctf is None:
+            from tensorwaves.transfer import CTF
 
-    #     #
-    #     # def apply_ctf(self, ctf=None, in_place=False, aperture_radius=None, aperture_rolloff=0., **kwargs):
-    #     #     if ctf is None:
-    #     #         ctf = CTF(extent=self.extent, gpts=self.gpts, energy=self.energy, aperture_radius=aperture_radius,
-    #     #                   aperture_rolloff=aperture_rolloff, **kwargs)
-    #     #     else:
-    #     #         ctf.adopt_grid(self)
-    #     #         ctf.energy = self.energy
-    #     #
-    #     #     return self.convolve(ctf.get_tensor(), in_place=in_place)
-    #
-    #     # def detect(self):
-    #     #     return Image(tf.abs(self._tensor) ** 2, extent=self._extent.copy(), sampling=self._sampling.copy())
-    #
+            ctf = CTF(aperture_radius=aperture_radius, aperture_rolloff=aperture_rolloff, grid=self.grid,
+                      accelerator=self.accelerator, **kwargs)
+        else:
+            ctf.adopt_grid(self)
+            ctf.energy = self.energy
+
+        return ctf.apply(self, in_place=in_place)
+
+    def detect(self):
+        from tensorwaves.detect import Image
+        return Image(tf.abs(self._tensor) ** 2, extent=self.grid.extent.copy())
+
     def copy(self):
         return self.__class__(tensor=tf.identity(self._tensor), grid=self.grid.copy(),
                               accelerator=self.accelerator.copy())
 
 
-class FrequencyMultiplier(HasData, HasGrid, HasAccelerator):
+class FrequencyMultiplier(HasData, Showable, HasAccelerator):
 
     def __init__(self, extent=None, gpts=None, sampling=None, energy=None, save_data=True, grid=None, accelerator=None):
 
         HasData.__init__(self, save_data=save_data)
-        HasGrid.__init__(self, extent=extent, gpts=gpts, sampling=sampling, space='fourier', grid=grid)
+        Showable.__init__(self, extent=extent, gpts=gpts, sampling=sampling, grid=grid, space='fourier')
         HasAccelerator.__init__(self, energy=energy, accelerator=accelerator)
 
         self.grid.register_observer(self)
         self.accelerator.register_observer(self)
+
+        self._observing = [self.grid, self.accelerator]
+
         self.register_observer(self)
 
     def get_semiangles(self, return_squared_norm=False, return_azimuth=False):
@@ -477,24 +510,18 @@ class FrequencyMultiplier(HasData, HasGrid, HasAccelerator):
 
     def apply(self, wave, in_place=False):
         wave.grid.match(self.grid)
-        #self.grid.match(wave.grid)
-        #print(self.grid)
-        self.accelerator.match(wave.accelerator)
+        wave.accelerator.match(self.accelerator)
 
         wave = wave.get_tensor()
-        tensor = tf.ifft2d(tf.fft2d(wave._tensor) * self.get_data())
+
+        tensor = tf.ifft2d(tf.fft2d(wave._tensor) * self.get_data()._tensor)
+
         if in_place:
             wave._tensor = tensor
         else:
-            wave = TensorWaves(tensor, extent=self.grid.extent, energy=self.accelerator.energy)
+            wave = TensorWaves(tensor, extent=self.grid.extent.copy(), energy=self.accelerator.energy)
+
         return wave
 
-    def show(self, space='direct', mode='magnitude', **kwargs):
-        self._show_data(space=space, mode=mode, **kwargs)
-
-    def _get_show_data(self):
-        return self.get_data().numpy()
-
-    def _show_data(self, space, mode, **kwargs):
-        show_array(array=self._get_show_data(), extent=self.grid.extent, space=self.grid.space, display_space=space,
-                   mode=mode, **kwargs)
+    def get_showable_tensor(self):
+        return self.get_data()

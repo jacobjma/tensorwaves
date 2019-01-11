@@ -3,7 +3,8 @@ from math import pi
 import numpy as np
 import tensorflow as tf
 
-from tensorwaves.bases import FrequencyMultiplier, notifying_property, base_property
+from tensorwaves.bases import FrequencyMultiplier, TensorWithEnergy, Tensor, notifying_property, base_property, \
+    HasData, HasAccelerator
 from tensorwaves.utils import complex_exponential
 
 
@@ -32,7 +33,8 @@ class Aperture(FrequencyMultiplier):
         else:
             tensor = tf.cast(alpha < self.radius, tf.float32)
 
-        return tf.cast(tensor[None, :, :], tf.complex64)
+        return TensorWithEnergy(tf.cast(tensor[None, :, :], tf.complex64), extent=self.grid.extent, space=self.space,
+                                energy=self.accelerator.energy)
 
     def copy(self):
         return self.__class__(radius=self.radius, rolloff=self.rolloff, save_data=True, grid=self.grid.copy(),
@@ -47,7 +49,7 @@ class TemporalEnvelope(FrequencyMultiplier):
         FrequencyMultiplier.__init__(self, extent=extent, gpts=gpts, sampling=sampling, energy=energy,
                                      save_data=save_data, grid=grid, accelerator=accelerator)
 
-        self._focal_spread = focal_spread
+        self._focal_spread = np.float32(focal_spread)
 
     focal_spread = notifying_property('_focal_spread')
 
@@ -63,10 +65,11 @@ class TemporalEnvelope(FrequencyMultiplier):
         else:
             tensor = tf.ones(alpha.shape)
 
-        return tf.cast(tensor[None, :, :], tf.complex64)
+        return TensorWithEnergy(tf.cast(tensor[None, :, :], tf.complex64), extent=self.grid.extent, space=self.space,
+                                energy=self.accelerator.energy)
 
 
-class PhaseAberration(FrequencyMultiplier):
+class PolarAbberations(object):
 
     def __init__(self,
                  C10=0., C12=0., phi12=0.,
@@ -74,11 +77,7 @@ class PhaseAberration(FrequencyMultiplier):
                  C30=0., C32=0., phi32=0., C34=0., phi34=0.,
                  C41=0., phi41=0., C43=0., phi43=0., C45=0., phi45=0.,
                  C50=0., C52=0., phi52=0., C54=0., phi54=0., C56=0., phi56=0.,
-                 defocus=0., astig_mag=0., astig_angle=0., coma=0., coma_angle=0., Cs=0., C5=0.,
-                 extent=None, gpts=None, sampling=None, energy=None, save_data=True, grid=None, accelerator=None):
-
-        FrequencyMultiplier.__init__(self, extent=extent, gpts=gpts, sampling=sampling, energy=energy,
-                                     save_data=save_data, grid=grid, accelerator=accelerator)
+                 defocus=0., astig_mag=0., astig_angle=0., coma=0., coma_angle=0., Cs=0., C5=0.):
 
         self._C10 = C10
         self._C12 = C12
@@ -158,10 +157,7 @@ class PhaseAberration(FrequencyMultiplier):
     Cs = base_property('C30')
     C5 = base_property('C50')
 
-    def _calculate_data(self, **kwargs):
-        # if len(kwargs) == 0:
-        _, _, alpha2, phi = self.get_semiangles(return_squared_norm=True, return_azimuth=True)
-        alpha = tf.sqrt(alpha2)
+    def _calculate_data(self, alpha, alpha2, phi):
 
         tensor = tf.zeros(alpha.shape)
 
@@ -197,6 +193,61 @@ class PhaseAberration(FrequencyMultiplier):
         return tensor
 
 
+class PhaseAberration(PolarAbberations, FrequencyMultiplier):
+
+    def __init__(self, extent=None, gpts=None, sampling=None, energy=None, save_data=True, grid=None, accelerator=None,
+                 **kwargs):
+        PolarAbberations.__init__(self, **kwargs)
+
+        FrequencyMultiplier.__init__(self, extent=extent, gpts=gpts, sampling=sampling, energy=energy,
+                                     save_data=save_data, grid=grid, accelerator=accelerator)
+
+    def _calculate_data(self, alpha=None, alpha2=None, phi=None):
+        if alpha is None:
+            _, _, alpha2, phi = self.get_semiangles(return_squared_norm=True, return_azimuth=True)
+            alpha = tf.sqrt(alpha2)
+
+        return TensorWithEnergy(PolarAbberations._calculate_data(self, alpha=alpha, alpha2=alpha2, phi=phi)[None, :, :],
+                                extent=self.grid.extent, space=self.space, energy=self.accelerator.energy)
+
+
+class PrismAberration(HasData, HasAccelerator, PolarAbberations):
+
+    def __init__(self, kx, ky, energy=None, accelerator=None, save_data=True, **kwargs):
+        self._kx = kx
+        self._ky = ky
+
+        HasData.__init__(self, save_data=save_data)
+        PolarAbberations.__init__(self, **kwargs)
+        HasAccelerator.__init__(self, energy=energy, accelerator=accelerator)
+
+        self.register_observer(self)
+
+    @property
+    def kx(self):
+        return self._kx
+
+    @property
+    def ky(self):
+        return self._ky
+
+    def _calculate_data(self):
+        alpha_x = self.kx * self.accelerator.wavelength
+        alpha_y = self.ky * self.accelerator.wavelength
+
+        alpha2 = alpha_x ** 2 + alpha_y ** 2
+        alpha = tf.sqrt(alpha2)
+
+        phi = tf.atan2(alpha_x, alpha_y)
+
+        tensor = PolarAbberations._calculate_data(self, alpha=alpha, alpha2=alpha2, phi=phi)
+
+        tensor = complex_exponential(
+            - 2 * np.pi / self.accelerator.wavelength * tensor)
+
+        return tensor
+
+
 class Translate(FrequencyMultiplier):
 
     def __init__(self, positions=None, extent=None, gpts=None, sampling=None, save_data=True, grid=None,
@@ -223,17 +274,71 @@ class Translate(FrequencyMultiplier):
 
     @positions.setter
     def positions(self, positions):
+
         old = self.positions
         self._positions = self._validate_positions(positions)
         change = np.any(self._positions != old)
         self.notify_observers({'name': '_positions', 'old': old, 'new': positions, 'change': change})
 
-    def _calculate_data(self):
-        kx, ky = self.grid.fftfreq()
-        tensor = complex_exponential(2 * np.pi * (kx[None, :, None] * self.positions[:, 0][:, None, None] +
-                                                  ky[None, None, :] * self.positions[:, 1][:, None, None]))
+    def _calculate_data(self, kx=None, ky=None):
+        if (kx is None) | (ky is None):
+            kx, ky = self.grid.fftfreq()
+            tensor = complex_exponential(2 * np.pi * (kx[None, :, None] * self.positions[:, 0][:, None, None] +
+                                                      ky[None, None, :] * self.positions[:, 1][:, None, None]))
 
-        return tensor
+        else:
+            tensor = complex_exponential(2 * np.pi * (kx * self.positions[:, 0] + ky * self.positions[:, 1]))
+
+        return Tensor(tf.cast(tensor, tf.complex64), extent=self.grid.extent, space=self.space)
+
+
+class PrismTranslate(HasData, HasAccelerator):
+
+    def __init__(self, kx, ky, positions=None, save_data=True, energy=None, accelerator=None):
+
+        self._kx = kx
+        self._ky = ky
+
+        HasData.__init__(self, save_data=save_data)
+        HasAccelerator.__init__(self, energy=energy, accelerator=accelerator)
+
+        if positions is None:
+            positions = [0., 0.]
+
+        self._positions = self._validate_positions(positions)
+
+    @property
+    def kx(self):
+        return self._kx
+
+    @property
+    def ky(self):
+        return self._ky
+
+    @property
+    def positions(self):
+        return self._positions
+
+    @positions.setter
+    def positions(self, positions):
+
+        old = self.positions
+        self._positions = self._validate_positions(positions)
+        change = np.any(self._positions != old)
+        self.notify_observers({'name': '_positions', 'old': old, 'new': positions, 'change': change})
+
+    def _validate_positions(self, positions):
+        if isinstance(positions, (np.ndarray, list, tuple)):
+            positions = np.array(positions, dtype=np.float32)
+            if positions.shape == (2,):
+                positions = positions[None, :]
+
+        return positions
+
+    def _calculate_data(self):
+        tensor = complex_exponential(2 * np.pi * (self.kx * self.positions[:, 0] + self.ky * self.positions[:, 1]))
+
+        return tf.cast(tensor, tf.complex64)
 
 
 class CTF(FrequencyMultiplier):
@@ -258,6 +363,8 @@ class CTF(FrequencyMultiplier):
         self._aperture.register_observer(self)
         self._temporal_envelope.register_observer(self)
 
+        self._observing += [self._aberrations, self._aperture, self._temporal_envelope]
+
     @property
     def aberrations(self):
         return self._aberrations
@@ -270,15 +377,20 @@ class CTF(FrequencyMultiplier):
     def temporal_envelope(self):
         return self._temporal_envelope
 
-    def _calculate_data(self):
-        tensor = complex_exponential(2 * pi / self.accelerator.wavelength * self._aberrations.get_data())
+    def _calculate_data(self, alpha=None, alpha2=None, phi=None):
+        if alpha is None:
+            _, _, alpha2, phi = self.get_semiangles(return_squared_norm=True, return_azimuth=True)
+            alpha = tf.sqrt(alpha2)
 
-        tensor *= self._aperture.get_data()[0]
+        tensor = complex_exponential(2 * pi / self.accelerator.wavelength * self._aberrations.get_data()._tensor)
 
-        tensor *= self._temporal_envelope.get_data()[0]
+        tensor *= self._aperture.get_data()._tensor[0]
 
-        return tensor[None, :, :]
+        tensor *= self._temporal_envelope.get_data()._tensor[0]
 
-    # def copy(self):
+        return TensorWithEnergy(tensor, extent=self.grid.extent, space=self.space,
+                                energy=self.accelerator.energy)
+
+        # def copy(self):
     #     return self.__class__(extent=self._extent.copy(), gpts=self._gpts.copy(), sampling=self._sampling.copy(),
     #                           energy=self.energy, parametrization=self.parametrization.copy())

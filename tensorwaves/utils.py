@@ -82,6 +82,13 @@ def fftfreq(n, h):
     return tf.concat((p1, p2), axis=0) / (n * h)
 
 
+def fftfreq2d(gpts, sampling):
+    value = []
+    for n, h in zip(gpts, sampling):
+        value += [fftfreq(n, h)]
+    return value
+
+
 def fft_shift(tensor, axes):
     shift = [tensor.shape[axis].value // 2 for axis in axes]
     return tf.manip.roll(tensor, shift, axes)
@@ -95,7 +102,7 @@ def wrapped_slice(tensor, begin, size):
 
 class ProgressBar(object):
 
-    def __init__(self, num_iter, units='', description='', update_every=5, disable=False):
+    def __init__(self, num_iter, units='', description='', update_every=2, disable=False):
 
         self._num_iter = num_iter
         self._units = units

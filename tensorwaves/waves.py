@@ -1,29 +1,28 @@
-from numbers import Number
-
 import numpy as np
 import tensorflow as tf
+
+from tensorwaves.bases import HasData, Showable, HasAccelerator, notifying_property, TensorWaves, Observer, Observable
+from tensorwaves.potentials import Potential
+from tensorwaves.scan import LineScan, GridScan
+from tensorwaves.transfer import CTF, Translate, PrismAberration, PrismTranslate
+from tensorwaves.utils import complex_exponential, wrapped_slice, freq2angles, bar
 from ase import Atoms
 
-from tensorwaves.bases import HasData, HasGrid, HasAccelerator, notifying_property, TensorWaves, Observer, Observable, \
-    GridException
-from tensorwaves.plotutils import show_array
-from tensorwaves.transfer import CTF, Translate
-from tensorwaves.utils import complex_exponential, fft_shift, wrapped_slice, freq2angles, bar
-from tensorwaves.scan import LineScan, GridScan
-from tensorwaves.potentials import Potential
 
-
-class WaveFactory(HasData, HasGrid, HasAccelerator):
+class WaveFactory(HasData, Showable, HasAccelerator):
 
     def __init__(self, extent=None, gpts=None, sampling=None, energy=None, save_wave=True, grid=None, accelerator=None):
         HasData.__init__(self, save_data=save_wave)
-        HasGrid.__init__(self, extent=extent, gpts=gpts, sampling=sampling, space='direct', grid=grid)
+        Showable.__init__(self, extent=extent, gpts=gpts, sampling=sampling, grid=grid, space='direct')
         HasAccelerator.__init__(self, energy=energy, accelerator=accelerator)
 
         self.grid.register_observer(self)
         self.accelerator.register_observer(self)
 
     def multislice(self, potential, in_place=False):
+        if isinstance(potential, Atoms):
+            potential = Potential(atoms=potential)
+
         self.grid.match(potential.grid)
 
         wave = self.get_tensor()
@@ -46,11 +45,11 @@ class WaveFactory(HasData, HasGrid, HasAccelerator):
     def numpy(self):
         return self.get_tensor().numpy()
 
-    def _get_show_data(self):
-        return self.numpy()
+    def get_showable_tensor(self, i=None):
+        return self.get_data()
 
-    def show(self, space='direct', mode='magnitude', **kwargs):
-        self.get_tensor().show(space=space, mode=mode, **kwargs)
+    # def show(self, space='direct', mode='magnitude', **kwargs):
+    #    self.get_tensor().show(space=space, mode=mode, **kwargs)
 
 
 class Node(object):
@@ -77,10 +76,6 @@ class Node(object):
 
         return wave
 
-
-# class Source(object):
-#
-#     def __init__(self, in_wave):
 
 class Pipeline(Observer, Observable):
 
@@ -134,7 +129,22 @@ class PlaneWaves(WaveFactory):
                            extent=self._grid.extent, energy=self._accelerator.energy)
 
 
-class ProbeWaves(WaveFactory):
+class Scanable(object):
+
+    def linescan(self, start, end, num_positions=None, sampling=None, endpoint=True, max_batch=1, potential=None,
+                 detectors=None):
+        scan = LineScan(start=start, end=end, num_positions=num_positions, sampling=sampling, endpoint=endpoint)
+
+        return scan.scan(scan, max_batch=max_batch, potential=potential, detectors=detectors)
+
+    def gridscan(self, start, end, num_positions=None, sampling=None, endpoint=True, max_batch=1, potential=None,
+                 detectors=None):
+        scan = GridScan(start=start, end=end, num_positions=num_positions, sampling=sampling, endpoint=endpoint)
+
+        return scan.scan(scan, max_batch=max_batch, potential=potential, detectors=detectors)
+
+
+class ProbeWaves(WaveFactory, Scanable):
 
     def __init__(self, positions=None, aperture_radius=1, aperture_rolloff=0., extent=None, gpts=None, sampling=None,
                  energy=None, save_wave=True, grid=None, accelerator=None, **kwargs):
@@ -144,10 +154,16 @@ class ProbeWaves(WaveFactory):
         self._translate = Translate(positions=positions, grid=self._ctf.grid, accelerator=self._ctf.accelerator)
 
         self._ctf.register_observer(self)
+        self._ctf.aberrations.register_observer(self)
+        self._ctf.aperture.register_observer(self)
+        self._ctf.temporal_envelope.register_observer(self)
+
         self._translate.register_observer(self)
 
         WaveFactory.__init__(self, extent=extent, gpts=gpts, sampling=sampling, energy=energy, save_wave=save_wave,
                              grid=self._ctf.grid, accelerator=self._ctf.accelerator)
+
+        self._observing = self._ctf._observing + self._translate._observing + [self._translate]
 
     @property
     def ctf(self):
@@ -158,8 +174,13 @@ class ProbeWaves(WaveFactory):
         return self._translate
 
     def _calculate_data(self):
-        return TensorWaves(tf.fft2d(self._ctf.get_data() * self._translate.get_data()), extent=self._grid.extent,
-                           energy=self._accelerator.energy)
+        return TensorWaves(tf.fft2d(self._ctf.get_data()._tensor * self._translate.get_data()._tensor),
+                           extent=self._grid.extent, energy=self._accelerator.energy)
+
+    def generate_scan_positions(self, scan, max_batch=1):
+        for positions in scan.generate_positions(max_batch):
+            self.translate.positions = positions
+            yield self.get_tensor()
 
     # def transmit(self, position, potential):
     #     self.match_grid(potential)
@@ -167,97 +188,43 @@ class ProbeWaves(WaveFactory):
     #     tensor.multislice(potential)
     #     return tensor
 
-    def linescan(self, start, end, num_positions=None, sampling=None, endpoint=True, max_batch=1, potential=None,
-                 detectors=None):
-
-        scan = LineScan(start=start, end=end, num_positions=num_positions, sampling=sampling, endpoint=endpoint)
-
-        return self.scan(scan, max_batch=max_batch, potential=potential, detectors=detectors)
-
-    def scan(self, scan, max_batch=1, potential=None, detectors=None):
-
-        for detector in detectors:
-            scan.register_detector(detector)
-
-        num_iter = (scan.num_positions + max_batch - 1) // max_batch
-
-        for tensor in bar(self.generate_scan_positions(scan, max_batch), num_iter):
-            tensor = tensor.multislice(potential)
-            scan.detect(tensor)
-
-        return scan
-
-    def generate_scan_positions(self, scan, max_batch):
-        for positions in scan.generate_positions(max_batch):
-            self.translate.positions = positions
-            yield self.get_tensor()
-
-    # def grid_scan(self, max_positions_per_batch, origin=None, extent=None, num_positions=None, sampling=None,
-    #               potential=None, detector=None):
-    #     if origin is None:
-    #         origin = np.zeros(2, dtype=np.float32)
-    #
-    #     if self.extent is None:
-    #         self.extent = potential.extent
-    #
-    #     if extent is None:
-    #         extent = potential.extent
-    #
-    #     potential.sampling = self.sampling
-    #
-    #     scan = GridScan(origin, extent, num_positions)
-    #
-    #     for positions in scan.generate_positions(max_positions_per_batch):
-    #         tensor = self.get_tensor(positions)
-    #         tensor.multislice(potential)
-    #         yield tensor
-    #
-    # def show(self, mode='magnitude', display_space='direct', axes=None, **kwargs):
-    #     self.get_tensor().show(mode=mode, display_space=display_space, **kwargs)
-
 
 class PrismWaves(WaveFactory):
 
-    def __init__(self, cutoff, interpolation=1., gpts=None, extent=None, sampling=None, energy=None):
+    def __init__(self, cutoff, interpolation=1., gpts=None, extent=None, sampling=None, energy=None, save_wave=True,
+                 grid=None, accelerator=None):
         self.cutoff = cutoff
         self.interpolation = interpolation
 
-        WaveFactory.__init__(self, gpts=gpts, extent=extent, sampling=sampling, energy=energy)
+        WaveFactory.__init__(self, extent=extent, gpts=gpts, sampling=sampling, energy=energy, save_wave=save_wave,
+                             grid=grid, accelerator=accelerator)
 
-    def _create_tensor(self, i):
-        n_max = np.ceil(self.cutoff / (self.wavelength / self.extent[0] * self.interpolation))
-        m_max = np.ceil(self.cutoff / (self.wavelength / self.extent[1] * self.interpolation))
+    def get_scattering_matrix(self):
+        return self.get_data()
 
-        kx = tf.cast(tf.range(-n_max, n_max + 1), tf.float32) / self.extent[0] * self.interpolation
-        ky = tf.cast(tf.range(-m_max, m_max + 1), tf.float32) / self.extent[1] * self.interpolation
+    def _calculate_data(self):
+        n_max = np.ceil(self.cutoff / (self.accelerator.wavelength / self.grid.extent[0] * self.interpolation))
+        m_max = np.ceil(self.cutoff / (self.accelerator.wavelength / self.grid.extent[1] * self.interpolation))
 
-        mask = tf.sqrt(kx[:, None] ** 2 + ky[None, :] ** 2) < (self.cutoff / self.wavelength)
+        kx = tf.cast(tf.range(-n_max, n_max + 1), tf.float32) / self.grid.extent[0] * self.interpolation
+        ky = tf.cast(tf.range(-m_max, m_max + 1), tf.float32) / self.grid.extent[1] * self.interpolation
+
+        mask = tf.sqrt(kx[:, None] ** 2 + ky[None, :] ** 2) < (self.cutoff / self.accelerator.wavelength)
 
         ky, kx = tf.meshgrid(ky, kx)
         kx = tf.boolean_mask(kx, mask)
         ky = tf.boolean_mask(ky, mask)
 
-        x, y = self.linspace()
+        x, y = self.grid.linspace()
 
-        if i is None:
-            tensor = complex_exponential(2 * np.pi * (kx[:, None, None] * x[None, :, None] +
-                                                      ky[:, None, None] * y[None, None, :]))
+        tensor = complex_exponential(2 * np.pi * (kx[:, None, None] * x[None, :, None] +
+                                                  ky[:, None, None] * y[None, None, :]))
 
-            return tensor, kx, ky
-        else:
-            tensor = complex_exponential(2 * np.pi * (kx[i, None, None] * x[None, :, None] +
-                                                      ky[i, None, None] * y[None, None, :]))
+        return ScatteringMatrix(tensor, kx=kx, ky=ky, interpolation=self.interpolation, extent=self.grid.extent,
+                                energy=self.accelerator.energy)
 
-            return tensor, kx[i, None], ky[i, None]
-
-    def get_tensor(self, i=None):
-        tensor, kx, ky = self._create_tensor(i=i)
-
-        return ScatteringMatrix(tensor, kx=kx, ky=ky, interpolation=self.interpolation, extent=self.extent,
-                                energy=self.energy)
-
-    def show_probe(self, x=None, y=None, mode='magnitude', display_space='direct', ax=None, defocus=0., **kwargs):
-        self.get_tensor().show_probe(x=x, y=y, mode=mode, display_space=display_space, ax=ax, defocus=defocus, **kwargs)
+    # def show_probe(self, x=None, y=None, mode='magnitude', display_space='direct', ax=None, defocus=0., **kwargs):
+    #    self.get_tensor().show_probe(x=x, y=y, mode=mode, display_space=display_space, ax=ax, defocus=defocus, **kwargs)
 
     # def generate(self, max_waves):
     #     x, y, kx, ky = self._coordinates()
@@ -273,14 +240,37 @@ class PrismWaves(WaveFactory):
     #     self.build().show_probe(mode, space, **kwargs)
 
 
-class ScatteringMatrix(TensorWaves):
+class ScatteringMatrix(TensorWaves, HasData, Scanable):
 
-    def __init__(self, tensor, kx, ky, interpolation, extent=None, sampling=None, energy=None):
+    def __init__(self, tensor, kx, ky, interpolation, position=None, extent=None, sampling=None, grid=None, energy=None,
+                 accelerator=None, save_wave=True, **kwargs):
         self._kx = kx
         self._ky = ky
         self._interpolation = interpolation
 
-        TensorWaves.__init__(self, tensor=tensor, extent=extent, sampling=sampling, energy=energy)
+        TensorWaves.__init__(self, tensor=tensor, extent=extent, sampling=sampling, grid=grid, energy=energy,
+                             accelerator=accelerator)
+        HasData.__init__(self, save_data=save_wave)
+
+        self._aberrations = PrismAberration(kx=kx, ky=ky, accelerator=self.accelerator, **kwargs)
+        self._translate = PrismTranslate(kx=-kx, ky=-ky, positions=position)
+
+        self._translate.register_observer(self)
+        self._aberrations.register_observer(self)
+
+        self._observing += [self._aberrations, self._translate]
+
+    @property
+    def position(self):
+        return self._translate.positions[0]
+
+    @position.setter
+    def position(self, value):
+        self._translate.positions = value
+
+    @property
+    def translate(self):
+        return self._translate
 
     @property
     def kx(self):
@@ -294,40 +284,39 @@ class ScatteringMatrix(TensorWaves):
     def interpolation(self):
         return self._interpolation
 
-    def probe(self, x, y, parametrization='polar', **kwargs):
-        ctf = CTF(energy=self.energy, parametrization=parametrization, **kwargs)
+    def get_tensor(self):
+        return self.get_data()
 
-        alpha_x = self.kx * self.wavelength
-        alpha_y = self.ky * self.wavelength
+    def get_probe(self):
+        return self.get_data()
 
-        alpha2 = alpha_x ** 2 + alpha_y ** 2
-        alpha = tf.sqrt(alpha2)
+    def get_showable_tensor(self):
+        return self.get_data()
 
-        phi = tf.atan2(alpha_x, alpha_y)
+    def _calculate_data(self):
+        tensor = self._aberrations.get_data()
 
-        chi = 2 * np.pi / self.wavelength * ctf.parametrization.get_function()(alpha, alpha ** 2, phi)
-
-        coefficients = complex_exponential(
-            -2 * np.pi * (self.kx * x + self.ky * y) - chi)[:, None, None]
+        tensor *= self._translate._calculate_data()
 
         begin = [0,
-                 np.round((x - self.extent[0] / (2 * self.interpolation)) / self.sampling[0]).astype(int),
-                 np.round((y - self.extent[1] / (2 * self.interpolation)) / self.sampling[1]).astype(int)]
+                 np.round((self.position[0] - self.grid.extent[0] / (2 * self.interpolation)) /
+                          self.grid.sampling[0]).astype(int),
+                 np.round((self.position[1] - self.grid.extent[1] / (2 * self.interpolation)) /
+                          self.grid.sampling[1]).astype(int)]
 
         size = [self.kx.shape[0].value,
-                np.ceil(self.gpts[0] / self.interpolation).astype(int),
-                np.ceil(self.gpts[1] / self.interpolation).astype(int)]
+                np.ceil(self.grid.gpts[0] / self.interpolation).astype(int),
+                np.ceil(self.grid.gpts[1] / self.interpolation).astype(int)]
 
-        tensor = wrapped_slice(self._tensor, begin, size)
+        tensor = tensor[:, None, None] * wrapped_slice(self._tensor, begin, size)
 
-        return tf.reduce_sum(tensor * coefficients, axis=0)
+        return TensorWaves(tensor=tf.reduce_sum(tensor, axis=0, keep_dims=True),
+                           extent=self._grid.extent / self.interpolation, energy=self._accelerator.energy)
 
-    def show_probe(self, x=None, y=None, mode='magnitude', display_space='direct', ax=None, defocus=0., **kwargs):
-        if x is None:
-            x = self.extent[0] / 2
+    def copy(self):
+        return self.__class__(tensor=self._tensor, kx=self._kx, ky=self._ky, interpolation=self._interpolation)
 
-        if y is None:
-            y = self.extent[1] / 2
-
-        tensor = self.probe(x, y, defocus=defocus)
-        show_array(tensor.numpy().T, self.space, self.extent, mode=mode, display_space=display_space, ax=ax, **kwargs)
+    # def generate_scan_positions(self, scan, max_batch=1):
+    #     for positions in scan.generate_positions(1):
+    #         self.translate.positions = positions
+    #         yield self.get_tensor()

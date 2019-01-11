@@ -1,40 +1,56 @@
 import tensorflow as tf
-
-from tensorwaves.bases import Tensor, HasGrid, HasAccelerator, HasData
+import numpy as np
+from tensorwaves.bases import Tensor, Showable, ShowableWithEnergy, HasData, notifying_property
 from tensorwaves.plotutils import show_array
 from tensorwaves.utils import freq2angles
 
 
 class Image(Tensor):
 
-    def __init__(self, tensor, extent=None, sampling=None, space='direct'):
-        Tensor.__init__(self, tensor, extent=extent, sampling=sampling, space=space)
+    def __init__(self, tensor, extent=None, sampling=None, grid=None, space='direct'):
+        Tensor.__init__(self, tensor, extent=extent, sampling=sampling, grid=grid, space=space)
 
-    def get_normalization_factor(self):
-        return tf.reduce_sum(self._tensor) * tf.reduce_prod(self.grid.sampling) * tf.reduce_prod(self.grid.gpts)
+    # def get_normalization_factor(self):
+    #     return tf.reduce_sum(self._tensor) * tf.reduce_prod(self.grid.sampling) * tf.cast(
+    #         tf.reduce_prod(self.grid.gpts), tf.float32)
+    #
+    # def normalize(self, dose):
+    #     self._tensor = self._tensor * dose / self.get_normalization_factor()
 
-    def normalize(self, dose):
-        self._tenor = self._tensor * dose / self.get_normalization_factor()
+    def scale_intensity(self, scale):
+        self._tensor = self._tensor * scale
 
-    def add_poisson_noise(self, in_place=True):
-        self._tensor = tf.random.poisson(self._tensor)
+    def apply_poisson_noise(self):
+        self._tensor = tf.random.poisson(self._tensor, shape=[1])[0]
 
-    def show(self, **kwargs):
-        show_array(self.numpy(), extent=self.grid.extent, space=self.grid.space, display_space=self.grid.space,
-                   mode='real',
-                   **kwargs)
+    def normalize(self):
+        mean, stddev = tf.nn.moments(self._tensor, axes=[0, 1, 2])
+        self._tensor = (self._tensor - mean) / tf.sqrt(stddev)
+
+    def add_gaussian_noise(self, stddev=1.):
+        self._tensor = self._tensor + tf.random.normal(self._tensor.shape, stddev=stddev)
+
+    def clip(self, min=0., max=np.inf):
+        self._tensor = tf.clip_by_value(self._tensor, clip_value_min=min, clip_value_max=max)
+
+    def save(self, path):
+        np.savez(file=path, tensor=self._tensor.numpy(), extent=self.grid.extent, space=self.space)
+
+    def show(self, i=None, space='direct', scale='linear', **kwargs):
+        Showable.show(self, i=i, space=space, mode='real', scale=scale, **kwargs)
 
 
-class Detector(HasData, HasGrid, HasAccelerator):
+class Detector(HasData, ShowableWithEnergy):
 
     def __init__(self, extent=None, gpts=None, sampling=None, energy=None, space='direct', save_data=True, grid=None,
                  accelerator=None):
         HasData.__init__(self, save_data=save_data)
-        HasGrid.__init__(self, extent=extent, gpts=gpts, sampling=sampling, space=space, grid=grid)
-        HasAccelerator.__init__(self, energy=energy, accelerator=accelerator)
+        ShowableWithEnergy.__init__(self, extent=extent, gpts=gpts, sampling=sampling, grid=grid, space=space,
+                                    energy=energy, accelerator=accelerator)
 
         self.grid.register_observer(self)
         self.accelerator.register_observer(self)
+        self.register_observer(self)
 
     # def get_intensity(self, tensor):
     #     return tf.abs(wave.get_tensor()._tensor) ** 2
@@ -48,36 +64,55 @@ class Detector(HasData, HasGrid, HasAccelerator):
 
 class RingDetector(Detector):
 
-    def __init__(self, inner=None, outer=None, integrate=True, extent=None, gpts=None, sampling=None, energy=None,
-                 save_data=True, grid=None, accelerator=None):
+    def __init__(self, inner=None, outer=None, rolloff=0., integrate=True, extent=None, gpts=None, sampling=None,
+                 energy=None, save_data=True, grid=None, accelerator=None):
         self._inner = inner
         self._outer = outer
+        self._rolloff = rolloff
         self._integrate = integrate
 
         Detector.__init__(self, extent=extent, gpts=gpts, sampling=sampling, energy=energy, space='fourier',
                           save_data=save_data, grid=grid, accelerator=accelerator)
 
+    inner = notifying_property('_inner')
+    outer = notifying_property('_outer')
+    rolloff = notifying_property('_rolloff')
+
     def _calculate_data(self):
         _, _, alpha2 = self.get_semiangles(return_squared_norm=True)
         alpha = tf.sqrt(alpha2)
-        return (alpha > self._inner) & (alpha < self._outer)
+
+        if self.rolloff > 0.:
+            tensor_outer = .5 * (1 + tf.cos(np.pi * (alpha - self.outer) / self.rolloff))
+            tensor_outer *= tf.cast(alpha < self.outer + self.rolloff, tf.float32)
+            tensor_outer = tf.where(alpha > self.outer, tensor_outer, tf.ones(alpha.shape))
+
+            tensor_inner = .5 * (1 + tf.cos(np.pi * (self.inner - alpha) / self.rolloff))
+            tensor_inner *= tf.cast(alpha > self.inner - self.rolloff, tf.float32)
+            tensor_inner = tf.where(alpha < self.inner, tensor_inner, tf.ones(alpha.shape))
+            tensor = tensor_inner * tensor_outer
+
+        else:
+            tensor = tf.cast((alpha > self._inner) & (alpha < self._outer), tf.float32)
+
+        return tensor
 
     def detect(self, wave):
         wave.grid.match(self.grid)
         wave.accelerator.match(self.accelerator)
 
-        intensity = tf.abs(tf.fft2d(wave.get_tensor().tensorflow())) ** 2 * tf.cast(self.get_data(), tf.float32)
+        intensity = tf.abs(tf.fft2d(wave.get_tensor().tensorflow())) ** 2 * self.get_data()
 
         if self._integrate:
             return tf.reduce_sum(intensity, axis=(1, 2))
         else:
             return Image(intensity, extent=wave.grid.extent)
 
-    def get_tensor(self):
-        pass
+    def get_showable_tensor(self, i=None):
+        return self.get_data()[None]
 
-    def show(self):
-        pass
+    def show(self, i=None, space='fourier', scale='linear', **kwargs):
+        Showable.show(self, i=i, space=space, mode='real', scale=scale, **kwargs)
 
     def _create_tensor(self):
         pass

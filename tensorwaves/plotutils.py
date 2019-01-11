@@ -58,8 +58,8 @@ def plot_labels(display_space):
     return labels
 
 
-def show_array(array, extent, space, display_space='direct', mode='magnitude', colorbar=True, vmin=None,
-               vmax=None, num_cols=4, **kwargs):
+def show_array(array, extent, space, display_space='direct', mode='magnitude', scale='linear', colorbar=True, vmin=None,
+               vmax=None, num_cols=4, fig_scale=1, **kwargs):
     num_images = len(array)
     num_cols = min(num_cols, num_images)
     num_rows = (num_images + num_cols - 1) // num_cols
@@ -69,12 +69,17 @@ def show_array(array, extent, space, display_space='direct', mode='magnitude', c
     image_aspect = (y_range[-1] - y_range[0]) / (x_range[-1] - x_range[0])
     fig_aspect = num_rows / num_cols * image_aspect
 
-    fig = plt.figure(figsize=(3 * num_cols + .5, 3 * fig_aspect * num_cols))
+
+
+    fig = plt.figure(figsize=(fig_scale * 3 * num_cols + .5, fig_scale * 3 * fig_aspect * num_cols))
     gs = gridspec.GridSpec(num_rows + 1, num_cols + 2,
                            height_ratios=num_rows * [1] + [0.0001],
                            width_ratios=[0.0001] + num_cols * [1] + [.05])
 
     images = convert_complex(plot_array(array, space, display_space), mode=mode)
+
+    if scale == 'log':
+        images = np.log(1 + images)
 
     if vmin is None:
         vmin = np.min(images)
@@ -107,14 +112,12 @@ def show_array(array, extent, space, display_space='direct', mode='magnitude', c
     ax.set_yticks([])
     ax.set_ylabel(labels[1])
 
-
-
     right = gridspec.GridSpecFromSubplotSpec(3, 1, subplot_spec=gs[:-1, -1],
-                                             height_ratios=[(num_rows - 1)/2, 1, (num_rows - 1)/2])
+                                             height_ratios=[(num_rows - 1) / 2, 1, (num_rows - 1) / 2])
     ax = plt.subplot(right[1, 0])
     plt.colorbar(mapable, cax=ax, orientation='vertical', label='', )
 
-    #gs.tight_layout(fig)
+    # gs.tight_layout(fig)
 
 
 def show_line(x, y, mode, ax=None, **kwargs):
