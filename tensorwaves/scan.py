@@ -7,7 +7,7 @@ import tensorflow as tf
 
 from tensorwaves.bases import HasData
 from tensorwaves.detect import Image
-from tensorwaves.utils import bar, batch_generator
+from tensorwaves.utils import bar, batch_generator, ProgressBar
 from tqdm import tqdm
 
 
@@ -52,13 +52,26 @@ class Scan(HasData):
 
         return tf.reshape(tf.concat(data[detector], axis=0), tf.reshape(self.num_positions, (-1,)))
 
-    def _calculate_data(self, max_batch=1, potential=None):
+    def scan(self, max_batch=1, potential=None, tracker=None):
+        self._data = self._calculate_data(max_batch=max_batch, potential=potential, tracker=tracker)
+        self.up_to_date = True
+
+        # return self.get_data()
+
+    def _calculate_data(self, max_batch=1, potential=None, tracker=None):
 
         data = OrderedDict(zip(self.detectors, [[]] * len(self.detectors)))
 
         num_iter = (np.prod(self.num_positions) + max_batch - 1) // max_batch
 
-        for positions in bar(self.generate_positions(max_batch), num_iter, description='Scanning'):
+        bar = ProgressBar(num_iter=num_iter, description='Scanning')
+
+        if tracker is not None:
+            tracker.add_bar(bar)
+
+        for i, positions in enumerate(self.generate_positions(max_batch)):
+            bar.update(i)
+
             # for positions in tqdm(self.generate_positions(max_batch), total=num_iter):
             self._scanable.translate.positions = positions
             tensor = self._scanable.get_tensor()
@@ -71,6 +84,9 @@ class Scan(HasData):
 
         for detector in data.keys():
             data[detector] = tf.reshape(tf.concat(data[detector], axis=0), tf.reshape(self.num_positions, (-1,)))
+
+        if tracker is not None:
+            del tracker._output[bar]
 
         return data
 
@@ -157,6 +173,9 @@ class GridScan(Scan):
 
         else:
             raise TypeError('pass either argument: \'num_positions\' or \'sampling\'')
+
+        if not endpoint:
+            self._end = self._end - np.abs(self._start - self._end) / self._num_positions
 
     def read_detector(self, detector=None):
         return Image(Scan.read_detector(self, detector)[None], extent=self._end - self._start)

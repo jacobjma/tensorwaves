@@ -25,8 +25,14 @@ class WaveFactory(HasData, Showable, HasAccelerator):
 
         self.grid.match(potential.grid)
 
+        #print(self.accelerator.energy)
+
         wave = self.get_tensor()
-        wave = wave.multislice(potential, in_place=in_place)
+
+        #print(wave.accelerator.energy)
+        #sss
+        #sss
+        wave = wave.multislice(potential, in_place=True)
         return wave
 
     def check_is_defined(self):
@@ -199,6 +205,9 @@ class PrismWaves(WaveFactory):
         WaveFactory.__init__(self, extent=extent, gpts=gpts, sampling=sampling, energy=energy, save_wave=save_wave,
                              grid=grid, accelerator=accelerator)
 
+    def get_tensor(self):
+        return self.get_data()
+
     def get_scattering_matrix(self):
         return self.get_data()
 
@@ -212,6 +221,7 @@ class PrismWaves(WaveFactory):
         mask = tf.sqrt(kx[:, None] ** 2 + ky[None, :] ** 2) < (self.cutoff / self.accelerator.wavelength)
 
         ky, kx = tf.meshgrid(ky, kx)
+
         kx = tf.boolean_mask(kx, mask)
         ky = tf.boolean_mask(ky, mask)
 

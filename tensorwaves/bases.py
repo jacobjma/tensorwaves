@@ -5,7 +5,7 @@ import tensorflow as tf
 
 from tensorwaves.plotutils import show_array
 from tensorwaves.utils import energy2wavelength, energy2sigma, linspace_no_endpoint, fftfreq, freq2angles, \
-    fourier_propagator, complex_exponential, bar
+    fourier_propagator, complex_exponential, ProgressBar
 
 
 class Observable(object):
@@ -442,7 +442,7 @@ class TensorWaves(TensorWithEnergy):
     def get_tensor(self):
         return self
 
-    def multislice(self, potential, in_place=False):
+    def multislice(self, potential, in_place=False, tracker=None):
         self.grid.match(potential.grid)
 
         if in_place:
@@ -450,11 +450,21 @@ class TensorWaves(TensorWithEnergy):
         else:
             wave = self.copy()
 
-        for potential_slice in bar(potential.slice_generator(), potential.num_slices, description='Multislice'):
+        bar = ProgressBar(num_iter=potential.num_slices, description='Multislice')
+
+        if tracker is not None:
+            tracker.add_bar(bar)
+
+        for i, potential_slice in enumerate(potential.slice_generator()):
+            bar.update(i)
+
             wave._tensor = wave._tensor * complex_exponential(wave.accelerator.interaction_parameter *
                                                               potential_slice)
 
             wave.propagate(potential.slice_thickness)
+
+        if tracker is not None:
+            del tracker._output[bar]
 
         return wave
 

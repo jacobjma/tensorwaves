@@ -8,8 +8,8 @@ from ase.data import covalent_radii
 from ase.data.colors import cpk_colors
 from scipy.optimize import brentq
 
-from tensorwaves.bases import Tensor, HasData, Showable
-from tensorwaves.utils import kappa, batch_generator
+from tensorwaves.bases import Tensor, HasData, Showable, GridProperty
+from tensorwaves.utils import kappa_ASE, batch_generator
 
 
 class ParameterizedPotential(object):
@@ -88,7 +88,7 @@ class LobatoPotential(ParameterizedPotential):
                         self.parameters[atomic_number][key_b] ** (3 / 2.))
              for key_a, key_b in zip(('a1', 'a2', 'a3', 'a4', 'a5'), ('b1', 'b2', 'b3', 'b4', 'b5'))]
 
-        b = [np.float32(2 * np.pi / tf.sqrt(self.parameters[atomic_number][key])) for key in
+        b = [2 * np.pi / tf.sqrt(self.parameters[atomic_number][key]) for key in
              ('b1', 'b2', 'b3', 'b4', 'b5')]
 
         def func(r):
@@ -134,7 +134,7 @@ class LobatoPotential(ParameterizedPotential):
 
 class KirklandPotential(ParameterizedPotential):
 
-    def __init__(self, tolerance=1e-2):
+    def __init__(self, tolerance=1e-3):
         super().__init__(filename='data/kirland.txt', tolerance=tolerance)
 
     def _create_function(self, atomic_number):
@@ -162,7 +162,7 @@ class KirklandPotential(ParameterizedPotential):
 
 class Quadrature(object):
 
-    def __init__(self, num_samples=25, num_nodes=100):
+    def __init__(self, num_samples=30, num_nodes=50):
         self._num_nodes = num_nodes
 
         self._quadrature = {}
@@ -386,14 +386,14 @@ class Potential(HasData, Showable):
         v = tf.reshape(v, padded_gpts)
         v = tf.slice(v, (margin, margin), self.grid.gpts)
 
-        return v[None, :, :] / kappa
+        return v[None, :, :] / kappa_ASE
 
     def get_showable_tensor(self, i=0):
         return self.get_tensor(i=i)
 
-    #def show(self, i=0, mode='magnitude', space='direct', color_scale='linear', **kwargs):
+    # def show(self, i=0, mode='magnitude', space='direct', color_scale='linear', **kwargs):
 
-        #self.get_tensor(i).show(mode=mode, space=space, **kwargs)
+    # self.get_tensor(i).show(mode=mode, space=space, **kwargs)
 
     def show_atoms(self, plane='xy', i=None):
 
@@ -417,6 +417,52 @@ class Potential(HasData, Showable):
 
         display_atoms(np.vstack(positions), np.hstack(atomic_numbers).astype(np.int), plane=plane, origin=origin,
                       box=box)
+
+
+class ArrayPotential(Showable):
+
+    def __init__(self, array, box, num_slices):
+        array = np.flip(array, axis=2)
+
+        self._array = np.float32(array)
+
+        if array.shape[2] % num_slices:
+            raise RuntimeError()
+
+        extent = box[:2]
+        gpts = GridProperty(lambda: np.array([dim for dim in self._array.shape[:2]]), dtype=np.int32, locked=True)
+
+        Showable.__init__(self, extent=extent, gpts=gpts, space='direct')
+
+        self._thickness = box[2]
+
+        self._num_slices = num_slices
+        self._voxel_height = box[2] / array.shape[2]
+        self._slice_thickness_voxels = array.shape[2] // num_slices
+
+    @property
+    def thickness(self):
+        return self._thickness
+
+    @property
+    def num_slices(self):
+        return self._num_slices
+
+    @property
+    def slice_thickness(self):
+        return self.thickness / self.num_slices
+
+    def slice_generator(self):
+        for i in range(self.num_slices):
+            yield self._create_tensor(i)
+
+    def get_tensor(self, i=0):
+        return Tensor(self._create_tensor(i), extent=self.grid.extent, space=self.space)
+
+    def _create_tensor(self, i=None):
+        return (tf.reduce_sum(self._array[:, :, i * self._slice_thickness_voxels:
+                                                i * self._slice_thickness_voxels + self._slice_thickness_voxels],
+                              axis=2) * self._voxel_height)[None, :, :]
 
 
 def plane2axes(plane):

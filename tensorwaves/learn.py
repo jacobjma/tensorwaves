@@ -1,6 +1,7 @@
+import os
+
 import matplotlib.pyplot as plt
 import numpy as np
-from ase.io import write
 from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.spatial.distance import cdist
 
@@ -63,6 +64,17 @@ class TrainingSet(object):
     def __init__(self, examples):
         self._examples = examples
 
+    @property
+    def num_examples(self):
+        return len(self._examples)
+
+    def save(self, base_name, padding=3):
+        for i, example in enumerate(self._examples):
+            example.save(base_name + '_{}.npz'.format(str(i).zfill(padding)))
+
+    def __getitem__(self, i):
+        return self._examples[i]
+
 
 class TrainingExample(object):
 
@@ -79,16 +91,45 @@ class TrainingExample(object):
         return self._truth
 
 
-class TrainingSetSTEM(object):
+class TrainingSetSTEM(TrainingSet):
 
-    def __init__(self, examples):
-        self._examples = examples
+    def __init__(self, examples=None):
+        TrainingSet.__init__(self, examples)
 
-    def save(self, path, pad=3):
+    def as_tensors(self):
+        size = tuple(self._examples[0].grid.gpts)
+        num_classes = self._examples[0].num_classes + 1
+
+        images = np.zeros((self.num_examples,) + size + (1,))
+        labels = np.zeros((self.num_examples,) + size + (num_classes,))
+
         for i, example in enumerate(self._examples):
-            write(path + '/atoms_{}.traj'.format(str(i).zfill(pad)), example._atoms)
-            np.save(path + '/image_{}.npy'.format(str(i).zfill(pad)), example._image)
-            np.save(path + '/label_{}.npy'.format(str(i).zfill(pad)), example._label)
+            images[i] = example._image[:, :, :, None]
+            labels[i] = example._truth[:, :, :]
+
+        return images, labels
+
+    @property
+    def height(self):
+        return self._examples[0].grid.gpts[0]
+
+    @property
+    def width(self):
+        return self._examples[0].grid.gpts[1]
+
+    def load(self, prefix):
+        folder = prefix.split('/')[:-1]
+        if len(folder) == 0:
+            prefix += '/'
+            folder = prefix.split('/')[:-1]
+
+        files = os.listdir('/'.join(folder))
+        base_name = prefix.split('/')[-1]
+        files = ['/'.join(folder + [file]) for file in files if file[:len(base_name)] == base_name]
+
+        self._examples = []
+        for file in files:
+            self._examples.append(load_training_example_stem(file))
 
 
 class TrainingExampleSTEM(HasGrid):
@@ -131,16 +172,18 @@ class TrainingExampleSTEM(HasGrid):
         self._truth = self._calculate_truth(self._cluster_labels, self._class_labels, gaussian_width,
                                             max_label=max_label)
 
-    def create_image(self, prism, detector):
+    def create_image(self, prism, detector, tracker):
         prism.grid.extent = self.grid.extent
 
         potential = Potential(self._atoms, sampling=prism.grid.sampling)
 
         S = prism.get_scattering_matrix()
 
-        S.multislice(potential, in_place=True)
+        S.multislice(potential, in_place=True, tracker=tracker)
 
         scan = GridScan(scanable=S, detectors=detector, num_positions=self.grid.gpts)
+
+        scan.scan(tracker=tracker)
 
         self._image = scan.read_detector().numpy()
 
@@ -225,7 +268,7 @@ def load_training_example_stem(file):
 
     atoms = Atoms(positions=loaded['positions'], numbers=loaded['atomic_numbers'], cell=loaded['cell'])
 
-    example = TrainingExampleSTEM(atoms=atoms)
+    example = TrainingExampleSTEM(atoms=atoms, num_positions=loaded['image'].shape[1:])
 
     example._cluster_labels = loaded['cluster_labels']
     example._class_labels = loaded['class_labels']

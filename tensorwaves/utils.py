@@ -3,18 +3,26 @@ import numpy as np
 
 from ase import units
 from IPython.display import clear_output
+from collections import OrderedDict
 
 EPS = 1e-12
 
-eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
-kappa = 4 * np.pi * eps0 / (2 * np.pi * units.Bohr * units._e * units.C)
+eps0_ASE = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
+
+kappa_SI = 4 * np.pi * units._eps0 / (2 * np.pi * units.Bohr * 1e-10 * units._e)
+kappa_ASE = 4 * np.pi * eps0_ASE / (2 * np.pi * units.Bohr * units._e * units.C)
+
+energy2mass = lambda x: (1 + units._e * x / (units._me * units._c ** 2)) * units._me
 
 energy2wavelength = lambda x: (
         units._hplanck * units._c / np.sqrt(x * (2 * units._me * units._c ** 2 / units._e + x)) / units._e * 1e10)
 
 energy2sigma = lambda x: (
-        2 * np.pi * units._me * units.kg * units._e * units.C * energy2wavelength(x) / (
+        2 * np.pi * energy2mass(x) * units.kg * units._e * units.C * energy2wavelength(x) / (
         units._hplanck * units.s * units.J) ** 2)
+
+energy2sigma_SI = lambda x: 2 * np.pi * energy2mass(x) * units._e * energy2wavelength(x) / units._hplanck ** 2
+
 
 
 def freq2angles(kx, ky, wavelength, return_squared_norm=False, return_azimuth=False):
@@ -100,9 +108,35 @@ def wrapped_slice(tensor, begin, size):
     return tf.slice(tensor, [0] * len(begin), size)
 
 
+class ProgressTracker(object):
+
+    def __init__(self, bars=None):
+        if bars is None:
+            bars = []
+
+        self._output = OrderedDict(zip(bars, [''] * len(bars)))
+
+    def add_bar(self, bar):
+        bar._tracker = self
+        self._output[bar] = ''
+
+    def notify(self, bar):
+        percentage = bar.get_percentage()
+        updated = False
+        if percentage != bar._last_update:
+            bar._last_update = percentage
+            self._output[bar] = bar.get_output(percentage)
+            updated = True
+
+        if updated:
+            for bar, bar_out in self._output.items():
+                print(bar_out)
+            clear_output(wait=True)
+
+
 class ProgressBar(object):
 
-    def __init__(self, num_iter, units='', description='', update_every=2, disable=False):
+    def __init__(self, num_iter, units='', description='', update_every=2, disable=False, tracker=None):
 
         self._num_iter = num_iter
         self._units = units
@@ -113,19 +147,34 @@ class ProgressBar(object):
         self._intervals = 100 // update_every
         self._last_update = None
 
-    def print(self, i):
+        self._i = 0
+        self._tracker = tracker
 
-        if not self._disable:
-            self._print(i)
+    def get_percentage(self):
+        percentage = int((self._i + 1) / self._num_iter * self._intervals) * self._update_every
+        return percentage
 
-    def _print(self, i):
+    def get_output(self, percentage):
+        progress_bar = ('|' * (percentage // self._update_every)).ljust(self._intervals)
+        output = '{} [{}] {}/{} {}'.format(self._description, progress_bar, self._i + 1, self._num_iter, self._units)
+        return output
 
-        p = int((i + 1) / self._num_iter * self._intervals) * self._update_every
+    def update(self, i):
 
-        if p != self._last_update:
-            self._last_update = p
-            progress_bar = ('|' * (p // self._update_every)).ljust(self._intervals)
-            print('{} [{}] {}/{} {}'.format(self._description, progress_bar, i + 1, self._num_iter, self._units))
+        self._i = i
+
+        if self._tracker:
+            self._tracker.notify(self)
+        else:
+            if not self._disable:
+                self._print()
+
+    def _print(self):
+        percentage = self.get_percentage()
+        if percentage != self._last_update:
+            self._last_update = percentage
+            output = self.get_output(percentage)
+            print(output)
             clear_output(wait=True)
 
 
@@ -139,5 +188,4 @@ def bar(itrble, num_iter=None, **kwargs):
 
     for i, j in enumerate(itrble):
         yield j
-
-        progress_bar.print(i)
+        progress_bar.update(i)
