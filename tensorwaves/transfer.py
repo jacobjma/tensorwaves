@@ -41,6 +41,58 @@ class Aperture(FrequencyMultiplier):
                               accelerator=self.accelerator.copy())
 
 
+class PrismAperture(HasData, HasAccelerator):
+
+    def __init__(self, kx, ky, radius=np.inf, rolloff=0., energy=None, accelerator=None, save_data=True, **kwargs):
+        self._kx = kx
+        self._ky = ky
+
+        self._radius = radius
+        self._rolloff = rolloff
+
+        HasData.__init__(self, save_data=save_data)
+        HasAccelerator.__init__(self, energy=energy, accelerator=accelerator)
+
+        self.register_observer(self)
+
+    radius = notifying_property('_radius')
+    rolloff = notifying_property('_rolloff')
+
+    @property
+    def kx(self):
+        return self._kx
+
+    @property
+    def ky(self):
+        return self._ky
+
+    def _calculate_data(self):
+        alpha_x = self.kx * self.accelerator.wavelength
+        alpha_y = self.ky * self.accelerator.wavelength
+
+        alpha2 = alpha_x ** 2 + alpha_y ** 2
+        alpha = tf.sqrt(alpha2)
+
+        if self.rolloff > 0.:
+            tensor = .5 * (1 + tf.cos(pi * (alpha - self.radius) / self.rolloff))
+            tensor *= tf.cast(alpha < self.radius + self.rolloff, tf.float32)
+            tensor = tf.where(alpha > self.radius, tensor, tf.ones(alpha.shape))
+        else:
+            tensor = tf.cast(alpha < self.radius, tf.float32)
+        # tensor = tf.cast(alpha < self.radius, tf.float32)
+        return tensor
+
+        #
+        # phi = tf.atan2(alpha_x, alpha_y)
+        #
+        # tensor = PolarAbberations._calculate_data(self, alpha=alpha, alpha2=alpha2, phi=phi)
+        #
+        # tensor = complex_exponential(
+        #     - 2 * np.pi / self.accelerator.wavelength * tensor)
+        #
+        # return tensor
+
+
 class TemporalEnvelope(FrequencyMultiplier):
 
     def __init__(self, focal_spread=0., extent=None, gpts=None, sampling=None, energy=None,
@@ -69,7 +121,7 @@ class TemporalEnvelope(FrequencyMultiplier):
                                 energy=self.accelerator.energy)
 
 
-class PolarAbberations(object):
+class PolarAberrations(object):
 
     def __init__(self,
                  C10=0., C12=0., phi12=0.,
@@ -193,32 +245,40 @@ class PolarAbberations(object):
         return tensor
 
 
-class PhaseAberration(PolarAbberations, FrequencyMultiplier):
+class PhaseAberration(PolarAberrations, FrequencyMultiplier):
 
     def __init__(self, extent=None, gpts=None, sampling=None, energy=None, save_data=True, grid=None, accelerator=None,
                  **kwargs):
-        PolarAbberations.__init__(self, **kwargs)
+        PolarAberrations.__init__(self, **kwargs)
 
         FrequencyMultiplier.__init__(self, extent=extent, gpts=gpts, sampling=sampling, energy=energy,
                                      save_data=save_data, grid=grid, accelerator=accelerator)
+
+    def _line_data(self, phi, k_max=2):
+        k = tf.linspace(0., k_max, 1024)
+        alpha = self.accelerator.wavelength * k
+        tensor = PolarAberrations._calculate_data(self, alpha=alpha, alpha2=alpha ** 2, phi=phi)
+        return k, complex_exponential(2 * pi / self.accelerator.wavelength * tensor)
 
     def _calculate_data(self, alpha=None, alpha2=None, phi=None):
         if alpha is None:
             _, _, alpha2, phi = self.get_semiangles(return_squared_norm=True, return_azimuth=True)
             alpha = tf.sqrt(alpha2)
 
-        return TensorWithEnergy(PolarAbberations._calculate_data(self, alpha=alpha, alpha2=alpha2, phi=phi)[None, :, :],
-                                extent=self.grid.extent, space=self.space, energy=self.accelerator.energy)
+        tensor = PolarAberrations._calculate_data(self, alpha=alpha, alpha2=alpha2, phi=phi)[None, :, :]
+        tensor = complex_exponential(2 * pi / self.accelerator.wavelength * tensor)
+        return TensorWithEnergy(tensor=tensor, extent=self.grid.extent, space=self.space,
+                                energy=self.accelerator.energy)
 
 
-class PrismAberration(HasData, HasAccelerator, PolarAbberations):
+class PrismAberration(HasData, HasAccelerator, PolarAberrations):
 
     def __init__(self, kx, ky, energy=None, accelerator=None, save_data=True, **kwargs):
         self._kx = kx
         self._ky = ky
 
         HasData.__init__(self, save_data=save_data)
-        PolarAbberations.__init__(self, **kwargs)
+        PolarAberrations.__init__(self, **kwargs)
         HasAccelerator.__init__(self, energy=energy, accelerator=accelerator)
 
         self.register_observer(self)
@@ -240,7 +300,7 @@ class PrismAberration(HasData, HasAccelerator, PolarAbberations):
 
         phi = tf.atan2(alpha_x, alpha_y)
 
-        tensor = PolarAbberations._calculate_data(self, alpha=alpha, alpha2=alpha2, phi=phi)
+        tensor = PolarAberrations._calculate_data(self, alpha=alpha, alpha2=alpha2, phi=phi)
 
         tensor = complex_exponential(
             - 2 * np.pi / self.accelerator.wavelength * tensor)
@@ -359,11 +419,22 @@ class CTF(FrequencyMultiplier):
         FrequencyMultiplier.__init__(self, save_data=save_data, grid=self._aberrations.grid,
                                      accelerator=self._aberrations.accelerator)
 
-        self._aberrations.register_observer(self)
-        self._aperture.register_observer(self)
-        self._temporal_envelope.register_observer(self)
+        # self._aberrations.register_observer(self)
+        # self._aperture.register_observer(self)
+        # self._temporal_envelope.register_observer(self)
 
-        self._observing += [self._aberrations, self._aperture, self._temporal_envelope]
+        self._observing = [self._aberrations, self._aperture, self._temporal_envelope]
+
+    def register_observer(self, observer):
+        self._observers.append(observer)
+        if not observer in self._aberrations._observers:
+            self._aberrations.register_observer(observer)
+
+        if not observer in self._aperture._observers:
+            self._aperture.register_observer(observer)
+
+        if not observer in self._temporal_envelope._observers:
+            self._temporal_envelope.register_observer(observer)
 
     @property
     def aberrations(self):
@@ -382,7 +453,8 @@ class CTF(FrequencyMultiplier):
             _, _, alpha2, phi = self.get_semiangles(return_squared_norm=True, return_azimuth=True)
             alpha = tf.sqrt(alpha2)
 
-        tensor = complex_exponential(2 * pi / self.accelerator.wavelength * self._aberrations.get_data()._tensor)
+        # tensor = complex_exponential(2 * pi / self.accelerator.wavelength * self._aberrations.get_data()._tensor)
+        tensor = self._aberrations.get_data()._tensor
 
         tensor *= self._aperture.get_data()._tensor[0]
 

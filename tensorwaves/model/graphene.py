@@ -1,5 +1,6 @@
-from ase.lattice.hexagonal import Graphite
 import numpy as np
+from ase.lattice.hexagonal import Graphite
+
 from tensorwaves.noise import power_law_noise
 
 

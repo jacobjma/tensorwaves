@@ -7,8 +7,7 @@ import tensorflow as tf
 
 from tensorwaves.bases import HasData
 from tensorwaves.detect import Image
-from tensorwaves.utils import bar, batch_generator, ProgressBar
-from tqdm import tqdm
+from tensorwaves.utils import batch_generator, ProgressBar
 
 
 class Scan(HasData):

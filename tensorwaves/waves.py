@@ -1,12 +1,14 @@
+import itertools
+
 import numpy as np
 import tensorflow as tf
+from ase import Atoms
 
 from tensorwaves.bases import HasData, Showable, HasAccelerator, notifying_property, TensorWaves, Observer, Observable
 from tensorwaves.potentials import Potential
-from tensorwaves.scan import LineScan, GridScan
-from tensorwaves.transfer import CTF, Translate, PrismAberration, PrismTranslate
-from tensorwaves.utils import complex_exponential, wrapped_slice, freq2angles, bar
-from ase import Atoms
+from tensorwaves.scan import LineScan
+from tensorwaves.transfer import CTF, Translate, PrismAberration, PrismTranslate, PrismAperture
+from tensorwaves.utils import complex_exponential, wrapped_slice, freq2angles
 
 
 class WaveFactory(HasData, Showable, HasAccelerator):
@@ -25,13 +27,13 @@ class WaveFactory(HasData, Showable, HasAccelerator):
 
         self.grid.match(potential.grid)
 
-        #print(self.accelerator.energy)
+        # print(self.accelerator.energy)
 
         wave = self.get_tensor()
 
-        #print(wave.accelerator.energy)
-        #sss
-        #sss
+        # print(wave.accelerator.energy)
+        # sss
+        # sss
         wave = wave.multislice(potential, in_place=True)
         return wave
 
@@ -60,20 +62,28 @@ class WaveFactory(HasData, Showable, HasAccelerator):
 
 class Node(object):
 
-    def __init__(self, in_wave, operation, save_wave=True):
+    def __init__(self, operation, in_wave=None, save_wave=True):
         self._in_wave = in_wave
         self._operation = operation
         self._out_wave = None
         self._up_to_date = False
 
+        if in_wave is None:
+            self._source = True
+        else:
+            self._source = False
+
     def get_tensor(self):
         if not self._up_to_date:
-            wave = self._in_wave.get_tensor()
-
-            if isinstance(self._operation, Potential):
-                wave = wave.multislice(self._operation, in_place=False)
+            if self._source:
+                wave = self._operation.get_tensor()
             else:
-                wave = self._operation.apply(wave)
+                wave = self._in_wave.get_tensor()
+
+                if isinstance(self._operation, Potential):
+                    wave = wave.multislice(self._operation, in_place=False)
+                else:
+                    wave = self._operation.apply(wave)
 
             self._up_to_date = True
             self._out_wave = wave
@@ -95,16 +105,34 @@ class Pipeline(Observer, Observable):
             operation.register_observer(self)
 
         self._nodes = []
-        self._nodes.append(operations[0])
+        self._nodes = [Node(self._operations[0], in_wave=None)]
         for i, operation in enumerate(operations[1:]):
-            self._nodes.append(Node(self._nodes[i], operation))
+            self._nodes.append(Node(operation, in_wave=self._nodes[i]))
 
         self._updating = False
 
+        # print([operation._observing for operation in operations])
+
+        # for observed in showable._observing:
+        #    observed.register_observer(self)
+        # self._observing = []
+        # self._observing = operations + list(
+        #    itertools.chain.from_iterable([operation._observing for operation in operations]))
+
     def notify(self, observable, message):
+
         if not self._updating:
-            for node in self._nodes[self._operations.index(observable):]:
-                node._up_to_date = False
+            up_to_date = True
+
+            for node in self._nodes:
+
+                if observable is node._operation:
+                    up_to_date = False
+
+                elif observable in node._operation._observing:
+                    up_to_date = False
+
+                node._up_to_date = up_to_date
 
             self.notify_observers(message)
 
@@ -114,6 +142,9 @@ class Pipeline(Observer, Observable):
         tensor = self._nodes[-1].get_tensor()
         self._updating = False
         return tensor
+
+    def get_showable_tensor(self):
+        return self.get_tensor()
 
     def _get_show_data(self):
 
@@ -137,17 +168,20 @@ class PlaneWaves(WaveFactory):
 
 class Scanable(object):
 
-    def linescan(self, start, end, num_positions=None, sampling=None, endpoint=True, max_batch=1, potential=None,
-                 detectors=None):
-        scan = LineScan(start=start, end=end, num_positions=num_positions, sampling=sampling, endpoint=endpoint)
+    def linescan(self, detectors, start, end, num_positions=None, sampling=None, endpoint=True, max_batch=1,
+                 potential=None):
+        scan = LineScan(scanable=self, detectors=detectors, start=start, end=end, num_positions=num_positions,
+                        sampling=sampling, endpoint=endpoint)
 
-        return scan.scan(scan, max_batch=max_batch, potential=potential, detectors=detectors)
+        scan.scan(max_batch=max_batch, potential=potential)
 
-    def gridscan(self, start, end, num_positions=None, sampling=None, endpoint=True, max_batch=1, potential=None,
-                 detectors=None):
-        scan = GridScan(start=start, end=end, num_positions=num_positions, sampling=sampling, endpoint=endpoint)
+        return scan.get_data()
 
-        return scan.scan(scan, max_batch=max_batch, potential=potential, detectors=detectors)
+    # def gridscan(self, start, end, num_positions=None, sampling=None, endpoint=True, max_batch=1, potential=None,
+    #              detectors=None):
+    #     scan = GridScan(start=start, end=end, num_positions=num_positions, sampling=sampling, endpoint=endpoint)
+    #
+    #     return scan.scan(scan, max_batch=max_batch, potential=potential, detectors=detectors)
 
 
 class ProbeWaves(WaveFactory, Scanable):
@@ -264,11 +298,38 @@ class ScatteringMatrix(TensorWaves, HasData, Scanable):
 
         self._aberrations = PrismAberration(kx=kx, ky=ky, accelerator=self.accelerator, **kwargs)
         self._translate = PrismTranslate(kx=-kx, ky=-ky, positions=position)
+        self._aperture = PrismAperture(kx=kx, ky=ky, radius=np.inf, accelerator=self.accelerator)
 
         self._translate.register_observer(self)
         self._aberrations.register_observer(self)
+        self._aperture.register_observer(self)
 
-        self._observing += [self._aberrations, self._translate]
+    @property
+    def aperture(self):
+        return self._aperture
+
+    @property
+    def aberrations(self):
+        return self._aberrations
+
+    @property
+    def translate(self):
+        return self._translate
+
+    def register_observer(self, observer):
+        self._observers.append(observer)
+        if not observer in self._aberrations._observers:
+            self._aberrations.register_observer(observer)
+
+        if not observer in self._translate._observers:
+            self._translate.register_observer(observer)
+
+        if not observer in self._aperture._observers:
+            self._aperture.register_observer(observer)
+
+    @property
+    def probe_gpts(self):
+        return np.ceil(self.grid.gpts / self.interpolation).astype(int)
 
     @property
     def position(self):
@@ -277,10 +338,6 @@ class ScatteringMatrix(TensorWaves, HasData, Scanable):
     @position.setter
     def position(self, value):
         self._translate.positions = value
-
-    @property
-    def translate(self):
-        return self._translate
 
     @property
     def kx(self):
@@ -307,6 +364,9 @@ class ScatteringMatrix(TensorWaves, HasData, Scanable):
         tensor = self._aberrations.get_data()
 
         tensor *= self._translate._calculate_data()
+
+        if self._aperture.radius != np.inf:
+            tensor *= tf.cast(self._aperture._calculate_data(), tf.complex64)
 
         begin = [0,
                  np.round((self.position[0] - self.grid.extent[0] / (2 * self.interpolation)) /

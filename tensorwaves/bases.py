@@ -279,6 +279,13 @@ class Grid(Observable):
     def is_compatible(self, other):
         pass
 
+    @property
+    def frequency_range(self):
+
+        extent = [1 / self.extent[0] * self.gpts[0], 1 / self.extent[1] * self.gpts[1]]
+        return np.array([-extent[0] / 2, extent[0] / 2, -extent[1] / 2, extent[1] / 2])
+        # y_range =
+
     def match(self, other):
         if (self.extent is None) & (not self._extent.locked):
             self.extent = other.extent

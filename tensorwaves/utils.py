@@ -1,9 +1,9 @@
-import tensorflow as tf
-import numpy as np
-
-from ase import units
-from IPython.display import clear_output
 from collections import OrderedDict
+
+import numpy as np
+import tensorflow as tf
+from IPython.display import clear_output
+from ase import units
 
 EPS = 1e-12
 

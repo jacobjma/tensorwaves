@@ -188,6 +188,7 @@ class Potential(HasData, Showable):
     def __init__(self, atoms=None, origin=None, extent=None, gpts=None, sampling=None, slice_thickness=.5,
                  parametrization='lobato', periodic=True, method='splines', atoms_per_loop=10, tolerance=1e-2,
                  save_data=True, grid=None):
+
         HasData.__init__(self, save_data=save_data)
         Showable.__init__(self, extent=extent, gpts=gpts, sampling=sampling, grid=grid, space='direct')
 
@@ -336,7 +337,7 @@ class Potential(HasData, Showable):
                 return (r_min * np.exp(dt * np.linspace(0., self._quadrature.num_nodes - 1,
                                                         self._quadrature.num_nodes))).astype(np.float32)
 
-            nodes = create_nodes(min(self.grid.sampling), self.parametrization.get_cutoff(atomic_number))
+            nodes = create_nodes(min(self.grid.sampling) / 2, self.parametrization.get_cutoff(atomic_number))
 
             if positions.shape[0] > 0:
                 block_margin = tf.cast(self.parametrization.get_cutoff(atomic_number) / min(self.grid.sampling),
@@ -395,17 +396,22 @@ class Potential(HasData, Showable):
 
     # self.get_tensor(i).show(mode=mode, space=space, **kwargs)
 
-    def show_atoms(self, plane='xy', i=None):
+    def show_atoms(self, plane='xy', scale=100, i=None, margin=True):
 
         box = self.box
         origin = np.array([0., 0., 0.])
+
+        if margin:
+            atoms = self
+        else:
+            atoms = self.atoms
 
         positions = []
         atomic_numbers = []
         if i is None:
             for atomic_number in np.unique(self.atoms.get_atomic_numbers()):
-                positions.append(self.get_positions(atomic_number))
-                atomic_numbers.append([atomic_number] * len(self.get_positions(atomic_number)))
+                positions.append(atoms.get_positions(atomic_number))
+                atomic_numbers.append([atomic_number] * len(atoms.get_positions(atomic_number)))
 
         else:
             box[2] = self.slice_thickness
@@ -416,29 +422,49 @@ class Potential(HasData, Showable):
                 atomic_numbers.append([atomic_number] * len(self.get_positions_in_slice(atomic_number, i)))
 
         display_atoms(np.vstack(positions), np.hstack(atomic_numbers).astype(np.int), plane=plane, origin=origin,
-                      box=box)
+                      box=box, scale=scale)
 
 
 class ArrayPotential(Showable):
 
-    def __init__(self, array, box, num_slices):
+    def __init__(self, array, box, num_slices=None):
         array = np.flip(array, axis=2)
 
-        self._array = np.float32(array)
+        self._array = tf.convert_to_tensor(array, dtype=tf.float32)
+
+        if num_slices is None:
+            num_slices = np.ceil(array.shape[2] / (box[2] / .5)).astype(np.int32)
 
         if array.shape[2] % num_slices:
             raise RuntimeError()
 
         extent = box[:2]
-        gpts = GridProperty(lambda: np.array([dim for dim in self._array.shape[:2]]), dtype=np.int32, locked=True)
+        gpts = GridProperty(lambda: np.array([dim.value for dim in self._array.shape[:2]]), dtype=np.int32, locked=True)
 
         Showable.__init__(self, extent=extent, gpts=gpts, space='direct')
 
         self._thickness = box[2]
 
         self._num_slices = num_slices
-        self._voxel_height = box[2] / array.shape[2]
-        self._slice_thickness_voxels = array.shape[2] // num_slices
+        # self._voxel_height = box[2] / array.shape[2]
+        # self._slice_thickness_voxels = array.shape[2] // num_slices
+
+    def repeat(self, multiples):
+        self._array = tf.tile(self._array, multiples)
+        self.grid.extent = multiples[:2] * self.grid.extent
+        self._thickness = multiples[2] * self._thickness
+
+    @property
+    def box(self):
+        return np.concatenate((self.grid.extent, [self.thickness]))
+
+    @property
+    def voxel_height(self):
+        return self.thickness / self._array.shape[2].value
+
+    @property
+    def slice_thickness_voxels(self):
+        return self._array.shape[2].value // self.num_slices
 
     @property
     def thickness(self):
@@ -460,9 +486,15 @@ class ArrayPotential(Showable):
         return Tensor(self._create_tensor(i), extent=self.grid.extent, space=self.space)
 
     def _create_tensor(self, i=None):
-        return (tf.reduce_sum(self._array[:, :, i * self._slice_thickness_voxels:
-                                                i * self._slice_thickness_voxels + self._slice_thickness_voxels],
-                              axis=2) * self._voxel_height)[None, :, :]
+        return (tf.reduce_sum(self._array[:, :, i * self.slice_thickness_voxels:
+                                                i * self.slice_thickness_voxels + self.slice_thickness_voxels],
+                              axis=2) * self.voxel_height)[None, :, :]
+
+
+def potential_from_GPAW(calc):
+    from gpaw.utilities.ps2ae import PS2AE
+    potential_array = -PS2AE(calc).get_electrostatic_potential(ae=True)
+    return ArrayPotential(array=potential_array, box=np.diag(calc.atoms.cell))
 
 
 def plane2axes(plane):

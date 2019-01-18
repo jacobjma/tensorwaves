@@ -6,12 +6,12 @@ import bqplot
 import ipywidgets
 import numpy as np
 from bqplot import LinearScale, Axis, Figure, PanZoom
-
+from IPython.display import display
 from tensorwaves.bases import HasData, notifying_property
 from tensorwaves.plotutils import convert_complex, plot_array, plot_range
 
 
-def link_widget(o, widget, property_name):
+def link_widget(widget, o, property_name):
     def callback(change):
         setattr(o, property_name, change['new'])
 
@@ -27,6 +27,19 @@ def link_widget_component(widget, o, property_name, component):
 
     widget.observe(callback, 'value')
     return callback
+
+
+def display_slider(o, property_name, description=None, component=None, **kwargs):
+    if description is None:
+        description = property_name
+
+    slider = ipywidgets.FloatSlider(description=description, **kwargs)
+
+    if component is None:
+        link_widget(slider, o, property_name)
+    else:
+        link_widget_component(slider, o, property_name, component)
+    return display(slider)
 
 
 class InteractiveDisplay(HasData):
@@ -45,9 +58,10 @@ class InteractiveDisplay(HasData):
         panzoom = PanZoom(scales={'x': [self.scales['x']], 'y': [self.scales['y']]})
 
         if margin is None:
-            margin = {'top': 0, 'bottom': 40, 'left': 80, 'right': 10}
+            margin = {'top': 0, 'bottom': 60, 'left': 60, 'right': 0}
 
-        self.figure = Figure(marks=[], axes=list(self.axes.values()), interaction=panzoom, fig_margin=margin)
+        self.figure = Figure(marks=[], axes=list(self.axes.values()), interaction=panzoom, fig_margin=margin,
+                             min_aspect_ratio=1, max_aspect_ratio=1)
 
         self._last_update = None
 
@@ -87,6 +101,45 @@ class InteractiveDisplay(HasData):
         return self.figure
 
 
+class LineDisplay(InteractiveDisplay):
+
+    def __init__(self, showable, space='direct', mode='magnitude', color_scale='linear', auto_update=True,
+                 margin=None):
+        InteractiveDisplay.__init__(self, showable=showable, space=space, auto_update=auto_update, margin=margin,
+                                    mode=mode)
+
+        self.update_data()
+        self.update()
+
+        marks = []
+        for key, (x, y) in self._data.items():
+            marks += [bqplot.Lines(x=x.numpy(), y=np.imag(y.numpy()), scales=self.scales)]
+        self.figure.marks = marks
+
+        for s in self._showable:
+            s.register_observer(self)
+        self.register_observer(self)
+
+    def update_data(self):
+        self._data = {}
+        for showable in self._showable:
+            self._data[showable] = showable._line_data(phi=0)
+
+    def update_marks(self):
+
+        for ((key, (x, y)), mark) in zip(self._data.items(), self.figure.marks):
+            mark.x = x.numpy()
+            mark.y = np.imag(y.numpy())
+            # marks += [bqplot.Lines(x=x.numpy(), y=np.imag(y.numpy()), scales=self.scales)]
+        # self.figure.marks = marks
+
+    def update(self):
+        self.update_marks()
+        # self.update_coordinates()
+        # self.update_labels()
+        # self.update_info()
+
+
 class ImageDisplay(InteractiveDisplay):
 
     def __init__(self, showable, space='direct', mode='magnitude', color_scale='linear', auto_update=False,
@@ -100,13 +153,16 @@ class ImageDisplay(InteractiveDisplay):
         self.update_coordinates()
         self.update_labels()
 
-        for observed in showable._observing:
-            observed.register_observer(self)
+        self._scale_adjustment = 1
+
+        # for observed in showable._observing:
+        #    observed.register_observer(self)
 
         self._showable.register_observer(self)
         self.register_observer(self)
 
     color_scale = notifying_property('_color_scale')
+    scale_adjustment = notifying_property('_scale_adjustment')
 
     def update(self):
         self.update_marks()
@@ -149,7 +205,7 @@ class ImageDisplay(InteractiveDisplay):
 
         if self._color_scale == 'log':
             sign = np.sign(array)
-            array = sign * np.log(1 + np.abs(array))
+            array = sign * np.log(1 + self._scale_adjustment * np.abs(array))
 
         array = ((array - array.min()) / (array.max() - array.min()) * 255).astype(np.uint8)
         image = PIL.Image.fromarray(np.flipud(array.T))
@@ -167,7 +223,7 @@ class ImageDisplay(InteractiveDisplay):
         update_button.on_click(on_click)
 
         auto_update_button = ipywidgets.ToggleButton(value=self.auto_update, description='Auto-update')
-        link_widget(self, auto_update_button, 'auto_update')
+        link_widget(auto_update_button, self, 'auto_update')
 
         reset_button = ipywidgets.Button(description='Reset range')
         reset_button.on_click(self.update_range)
@@ -177,15 +233,21 @@ class ImageDisplay(InteractiveDisplay):
 
         space_widget = ipywidgets.Dropdown(description='Display space', options=('direct', 'fourier'), value=self.space,
                                            style={'description_width': '100px'})
-        link_widget(self, space_widget, 'space')
+        link_widget(space_widget, self, 'space')
 
         mode_widget = ipywidgets.Dropdown(description='Mode', options=('magnitude', 'real', 'imaginary'),
                                           value=self.mode, style={'description_width': '100px'})
-        link_widget(self, mode_widget, 'mode')
+        link_widget(mode_widget, self, 'mode')
 
         color_scale_widget = ipywidgets.Dropdown(description='Scale', options=('log', 'linear'),
                                                  value=self._color_scale, style={'description_width': '100px'})
-        link_widget(self, color_scale_widget, 'color_scale')
+        link_widget(color_scale_widget, self, 'color_scale')
+
+        scale_adjustment_widget = ipywidgets.FloatLogSlider(value=1, min=-10, max=10, step=0.02,
+                                                            description='Scale adjustment',
+                                                            disabled=False, continuous_update=True)
+
+        link_widget(scale_adjustment_widget, self, 'scale_adjustment')
 
         self._info_widget = ipywidgets.HTML()
         self.update_info()
@@ -195,8 +257,9 @@ class ImageDisplay(InteractiveDisplay):
                                       ipywidgets.HBox([space_widget]),
                                       ipywidgets.HBox([mode_widget]),
                                       ipywidgets.HBox([color_scale_widget]),
+                                      ipywidgets.HBox([scale_adjustment_widget]),
                                       ipywidgets.HBox([self._info_widget])])
 
-        box = ipywidgets.Box([self.figure, widget_box],
+        box = ipywidgets.Box([widget_box, self.figure, ],
                              layout=ipywidgets.Layout(display='flex', align_items='flex-start'))
         return box

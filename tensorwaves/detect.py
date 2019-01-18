@@ -1,7 +1,7 @@
-import tensorflow as tf
 import numpy as np
+import tensorflow as tf
+
 from tensorwaves.bases import Tensor, Showable, ShowableWithEnergy, HasData, notifying_property
-from tensorwaves.plotutils import show_array
 from tensorwaves.utils import freq2angles
 
 
@@ -101,10 +101,10 @@ class RingDetector(Detector):
         wave.grid.match(self.grid)
         wave.accelerator.match(self.accelerator)
 
-        intensity = tf.abs(tf.fft2d(wave.get_tensor().tensorflow())) ** 2 * self.get_data()
+        intensity = tf.abs(tf.fft2d(wave.get_tensor().tensorflow())) ** 2
 
         if self._integrate:
-            return tf.reduce_sum(intensity, axis=(1, 2))
+            return tf.reduce_sum(intensity * self.get_data(), axis=(1, 2)) / tf.reduce_sum(intensity, axis=(1, 2))
         else:
             return Image(intensity, extent=wave.grid.extent)
 
