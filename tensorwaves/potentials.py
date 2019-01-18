@@ -372,7 +372,7 @@ class Potential(HasData, Showable):
 
                     r_interp = tf.clip_by_value(r_interp, 0., tf.reduce_max(nodes))
 
-                    v_interp = tf.Variable(tf.reshape(
+                    v_interp = tf.contrib.eager.Variable(tf.reshape(
                         tf.contrib.image.interpolate_spline(
                             tf.tile(nodes[None, :], (size, 1))[:, :, None],
                             batch_radials[:, :, None],
