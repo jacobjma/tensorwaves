@@ -81,8 +81,8 @@ class Scan(HasData):
             for detector, detections in data.items():
                 detections.append(detector.detect(tensor))
 
-        for detector in data.keys():
-            data[detector] = tf.reshape(tf.concat(data[detector], axis=0), tf.reshape(self.num_positions, (-1,)))
+        # for detector in data.keys():
+        #    data[detector] = tf.reshape(tf.concat(data[detector], axis=0), tf.reshape(self.num_positions, (-1,)))
 
         if tracker is not None:
             del tracker._output[bar]
@@ -145,10 +145,10 @@ class GridScan(Scan):
                 return value.astype(dtype)
 
             elif isinstance(value, (list, tuple)):
-                return map(dtype, value)
+                return np.array(value, dtype=dtype)
 
             elif isinstance(value, Number):
-                return (dtype(value),) * 2
+                return np.array((dtype(value),) * 2)
 
             else:
                 raise RuntimeError()
@@ -174,7 +174,7 @@ class GridScan(Scan):
             raise TypeError('pass either argument: \'num_positions\' or \'sampling\'')
 
         if not endpoint:
-            self._end = self._end - np.abs(self._start - self._end) / self._num_positions
+            self._end = self._end - np.abs(self._start - self._end) / np.array(self._num_positions)
 
     def read_detector(self, detector=None):
         return Image(Scan.read_detector(self, detector)[None], extent=self._end - self._start)

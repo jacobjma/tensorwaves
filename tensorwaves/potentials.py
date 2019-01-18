@@ -327,7 +327,7 @@ class Potential(HasData, Showable):
         margin = (self.get_margin() / min(self.grid.sampling)).astype(np.int32)
         padded_gpts = self.grid.gpts + 2 * margin
 
-        v = tf.Variable(tf.zeros(np.prod(padded_gpts)))
+        v = tf.contrib.eager.Variable(tf.zeros(np.prod(padded_gpts)))
 
         for atomic_number in self._unique_atomic_numbers:
             positions = self.get_positions_in_slice(atomic_number, i)

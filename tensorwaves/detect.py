@@ -62,6 +62,26 @@ class Detector(HasData, ShowableWithEnergy):
         return freq2angles(*self._grid.fftfreq(), self._accelerator.wavelength, return_squared_norm, return_azimuth)
 
 
+class FullFieldDetector(Detector):
+    def __init__(self, extent=None, gpts=None, sampling=None, energy=None, save_data=True, grid=None, accelerator=None):
+        Detector.__init__(self, extent=extent, gpts=gpts, sampling=sampling, energy=energy, space='direct',
+                          save_data=save_data, grid=grid, accelerator=accelerator)
+
+    def detect(self, wave):
+        intensity = tf.abs(wave.get_tensor().tensorflow()) ** 2
+
+        return Image(intensity, extent=wave.grid.extent)
+
+
+class WaveDetector(Detector):
+    def __init__(self, extent=None, gpts=None, sampling=None, energy=None, save_data=True, grid=None, accelerator=None):
+        Detector.__init__(self, extent=extent, gpts=gpts, sampling=sampling, energy=energy, space='direct',
+                          save_data=save_data, grid=grid, accelerator=accelerator)
+
+    def detect(self, wave):
+        return wave
+
+
 class RingDetector(Detector):
 
     def __init__(self, inner=None, outer=None, rolloff=0., integrate=True, extent=None, gpts=None, sampling=None,
