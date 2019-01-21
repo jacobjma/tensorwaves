@@ -2,6 +2,8 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
 import matplotlib.gridspec as gridspec
+from ase.data import covalent_radii
+from ase.data.colors import cpk_colors
 
 
 def convert_complex(array, mode='magnitude'):
@@ -68,8 +70,6 @@ def show_array(array, extent, space, display_space='direct', mode='magnitude', s
 
     image_aspect = (y_range[-1] - y_range[0]) / (x_range[-1] - x_range[0])
     fig_aspect = num_rows / num_cols * image_aspect
-
-
 
     fig = plt.figure(figsize=(fig_scale * 3 * num_cols + .5, fig_scale * 3 * fig_aspect * num_cols))
     gs = gridspec.GridSpec(num_rows + 1, num_cols + 2,
@@ -140,3 +140,28 @@ def add_colorbar(ax, mapable, position='right', size='5%', pad=0.05, **kwargs):
     plt.colorbar(mapable, cax=cax, orientation=orientation, **kwargs)
 
     return cax
+
+
+def display_atoms(positions, numbers, plane, origin, box, scale=100, ax=None, colors=None):
+    if ax is None:
+        fig, ax = plt.subplots()
+
+    axes = plane2axes(plane)
+    edges = np.zeros((2, 5))
+    edges[0, :] += origin[axes[0]]
+    edges[1, :] += origin[axes[1]]
+    edges[0, 2:4] += np.array([box[0], box[1], box[2]])[axes[0]]
+    edges[1, 1:3] += np.array([box[0], box[1], box[2]])[axes[1]]
+
+    ax.plot(edges[0, :], edges[1, :], 'k-')
+
+    if len(positions) > 0:
+        positions = positions[:, axes]
+        if colors is None:
+            colors = cpk_colors[numbers]
+        sizes = covalent_radii[numbers]
+
+        ax.scatter(*positions.T, c=colors, s=scale * sizes)
+        ax.axis('equal')
+
+    plt.show()

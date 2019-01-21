@@ -4,7 +4,6 @@ from numbers import Number
 import numpy as np
 import tensorflow as tf
 
-from tensorwaves.plotutils import show_array
 from tensorwaves.utils import energy2wavelength, energy2sigma, linspace_no_endpoint, fftfreq, freq2angles, \
     fourier_propagator, complex_exponential, ProgressBar
 
@@ -385,6 +384,7 @@ class Showable(HasGrid):
         raise NotImplementedError()
 
     def show(self, i=None, space='direct', mode='magnitude', scale='linear', fig_scale=1, **kwargs):
+        from tensorwaves.plotutils import show_array
         array = self.get_showable_tensor(i).numpy()
 
         # if i is not None:

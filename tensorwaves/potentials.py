@@ -1,11 +1,10 @@
 import csv
 import os
 
-import matplotlib.pyplot as plt
+
 import numpy as np
 import tensorflow as tf
-from ase.data import covalent_radii
-from ase.data.colors import cpk_colors
+
 from scipy.optimize import brentq
 
 from tensorwaves.bases import Tensor, HasData, Showable, GridProperty
@@ -502,28 +501,3 @@ def plane2axes(plane):
         if axis == 'y': axes += (1,)
         if axis == 'z': axes += (2,)
     return axes
-
-
-def display_atoms(positions, numbers, plane, origin, box, scale=100, ax=None, colors=None):
-    if ax is None:
-        fig, ax = plt.subplots()
-
-    axes = plane2axes(plane)
-    edges = np.zeros((2, 5))
-    edges[0, :] += origin[axes[0]]
-    edges[1, :] += origin[axes[1]]
-    edges[0, 2:4] += np.array([box[0], box[1], box[2]])[axes[0]]
-    edges[1, 1:3] += np.array([box[0], box[1], box[2]])[axes[1]]
-
-    ax.plot(edges[0, :], edges[1, :], 'k-')
-
-    if len(positions) > 0:
-        positions = positions[:, axes]
-        if colors is None:
-            colors = cpk_colors[numbers]
-        sizes = covalent_radii[numbers]
-
-        ax.scatter(*positions.T, c=colors, s=scale * sizes)
-        ax.axis('equal')
-
-    plt.show()

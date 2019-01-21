@@ -1,6 +1,5 @@
 import os
 
-import matplotlib.pyplot as plt
 import numpy as np
 from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.spatial.distance import cdist
@@ -231,6 +230,7 @@ class TrainingExampleSTEM(HasGrid):
         return truth
 
     def show_classification(self):
+        import matplotlib.pyplot as plt
         cluster_centers = self.get_centers()
 
         for i, centers in enumerate(cluster_centers):
@@ -240,11 +240,13 @@ class TrainingExampleSTEM(HasGrid):
         plt.legend()
 
     def show_truth(self):
+        import matplotlib.pyplot as plt
         fig, axes = plt.subplots(1, 3, figsize=(10, 3))
         for i, ax in enumerate(axes):
             ax.imshow(self._truth[:, :, i].T, origin='lower')
 
     def show_image(self):
+        import matplotlib.pyplot as plt
         fig, ax = plt.subplots(1, 1, figsize=(6, 6))
         ax.imshow(self._image[0].T, origin='lower')
 
