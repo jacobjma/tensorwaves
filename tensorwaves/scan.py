@@ -1,7 +1,6 @@
 from collections import Iterable, OrderedDict
 from numbers import Number
 
-import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 
@@ -118,6 +117,8 @@ class LineScan(Scan):
             self._end -= (self._end - self._start) / self._num_positions
 
     def show_data(self, detectors=None):
+        import matplotlib.pyplot as plt
+
         if detectors is None:
             detectors = self.detectors
 
