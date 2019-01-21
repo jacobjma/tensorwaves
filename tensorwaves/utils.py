@@ -1,3 +1,4 @@
+from __future__ import print_function
 from collections import OrderedDict
 
 import numpy as np
@@ -22,7 +23,6 @@ energy2sigma = lambda x: (
         units._hplanck * units.s * units.J) ** 2)
 
 energy2sigma_SI = lambda x: 2 * np.pi * energy2mass(x) * units._e * energy2wavelength(x) / units._hplanck ** 2
-
 
 
 def freq2angles(kx, ky, wavelength, return_squared_norm=False, return_azimuth=False):
@@ -151,7 +151,7 @@ class ProgressBar(object):
         self._tracker = tracker
 
     def get_percentage(self):
-        percentage = int((self._i + 1) / self._num_iter * self._intervals) * self._update_every
+        percentage = int((self._i + 1) / float(self._num_iter) * self._intervals) * self._update_every
         return percentage
 
     def get_output(self, percentage):

@@ -1,3 +1,4 @@
+from __future__ import print_function
 from numbers import Number
 
 import numpy as np
@@ -464,7 +465,6 @@ class TensorWaves(TensorWithEnergy):
 
         for i, potential_slice in enumerate(potential.slice_generator()):
             bar.update(i)
-
             wave._tensor = wave._tensor * complex_exponential(wave.accelerator.interaction_parameter *
                                                               potential_slice)
 
@@ -523,7 +523,10 @@ class FrequencyMultiplier(HasData, Showable, HasAccelerator):
         self.register_observer(self)
 
     def get_semiangles(self, return_squared_norm=False, return_azimuth=False):
-        return freq2angles(*self.grid.fftfreq(), self.accelerator.wavelength, return_squared_norm, return_azimuth)
+        kx, ky = self._grid.fftfreq()
+
+        return freq2angles(kx=kx, ky=ky, wavelength=self._accelerator.wavelength,
+                           return_squared_norm=return_squared_norm, return_azimuth=return_azimuth)
 
     def apply(self, wave, in_place=False):
         wave.grid.match(self.grid)

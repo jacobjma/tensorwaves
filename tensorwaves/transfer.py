@@ -7,7 +7,6 @@ from tensorwaves.bases import FrequencyMultiplier, TensorWithEnergy, Tensor, not
     HasData, HasAccelerator
 from tensorwaves.utils import complex_exponential
 
-
 class Aperture(FrequencyMultiplier):
 
     def __init__(self, radius=np.inf, rolloff=0., extent=None, gpts=None, sampling=None, energy=None,

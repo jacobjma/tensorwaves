@@ -42,7 +42,10 @@ class WaveFactory(HasData, Showable, HasAccelerator):
         self._accelerator.check_is_defined()
 
     def get_semiangles(self, return_squared_norm=False, return_azimuth=False):
-        return freq2angles(*self._grid.fftfreq(), self._accelerator.wavelength, return_squared_norm, return_azimuth)
+        kx, ky = self._grid.fftfreq()
+
+        return freq2angles(kx=kx, ky=ky, wavelength=self._accelerator.wavelength,
+                           return_squared_norm=return_squared_norm, return_azimuth=return_azimuth)
 
     def get_tensor(self):
         return self.get_data()

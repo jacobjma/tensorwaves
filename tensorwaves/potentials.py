@@ -16,8 +16,6 @@ class ParameterizedPotential(object):
 
     def __init__(self, filename=None, parameters=None, tolerance=1e-2):
 
-        super().__init__()
-
         self._tolerance = tolerance
         self._cutoffs = {}
         self._functions = {}
@@ -81,7 +79,7 @@ class ParameterizedPotential(object):
 class LobatoPotential(ParameterizedPotential):
 
     def __init__(self, tolerance=1e-2):
-        super().__init__(filename='data/lobato.txt', tolerance=tolerance)
+        ParameterizedPotential.__init__(self, filename='data/lobato.txt', tolerance=tolerance)
 
     def _create_function(self, atomic_number):
         a = [np.float32(np.pi ** 2 * self.parameters[atomic_number][key_a] /
@@ -92,11 +90,11 @@ class LobatoPotential(ParameterizedPotential):
              ('b1', 'b2', 'b3', 'b4', 'b5')]
 
         def func(r):
-            return (a[0] * (2. / (b[0] * r) + 1) * tf.exp(-b[0] * r) +
-                    a[1] * (2. / (b[1] * r) + 1) * tf.exp(-b[1] * r) +
-                    a[2] * (2. / (b[2] * r) + 1) * tf.exp(-b[2] * r) +
-                    a[3] * (2. / (b[3] * r) + 1) * tf.exp(-b[3] * r) +
-                    a[4] * (2. / (b[4] * r) + 1) * tf.exp(-b[4] * r))
+            return (a[0] * (2. / (b[0] * r) + 1.) * tf.exp(-b[0] * r) +
+                    a[1] * (2. / (b[1] * r) + 1.) * tf.exp(-b[1] * r) +
+                    a[2] * (2. / (b[2] * r) + 1.) * tf.exp(-b[2] * r) +
+                    a[3] * (2. / (b[3] * r) + 1.) * tf.exp(-b[3] * r) +
+                    a[4] * (2. / (b[4] * r) + 1.) * tf.exp(-b[4] * r))
 
         return func
 
@@ -105,24 +103,24 @@ class LobatoPotential(ParameterizedPotential):
              for key_a, key_b in zip(('a1', 'a2', 'a3', 'a4', 'a5'), ('b1', 'b2', 'b3', 'b4', 'b5'))]
         b = [2 * np.pi / tf.sqrt(self.parameters[atomic_number][key]) for key in ('b1', 'b2', 'b3', 'b4', 'b5')]
 
-        dvdr_cut = - (a[0] * (2 / (b[0] * r_cut ** 2) + 2 / r_cut + b[0]) * tf.exp(-b[0] * r_cut) +
-                      a[1] * (2 / (b[1] * r_cut ** 2) + 2 / r_cut + b[1]) * tf.exp(-b[1] * r_cut) +
-                      a[2] * (2 / (b[2] * r_cut ** 2) + 2 / r_cut + b[2]) * tf.exp(-b[2] * r_cut) +
-                      a[3] * (2 / (b[3] * r_cut ** 2) + 2 / r_cut + b[3]) * tf.exp(-b[3] * r_cut) +
-                      a[4] * (2 / (b[4] * r_cut ** 2) + 2 / r_cut + b[4]) * tf.exp(-b[4] * r_cut))
+        dvdr_cut = - (a[0] * (2. / (b[0] * r_cut ** 2) + 2. / r_cut + b[0]) * tf.exp(-b[0] * r_cut) +
+                      a[1] * (2. / (b[1] * r_cut ** 2) + 2. / r_cut + b[1]) * tf.exp(-b[1] * r_cut) +
+                      a[2] * (2. / (b[2] * r_cut ** 2) + 2. / r_cut + b[2]) * tf.exp(-b[2] * r_cut) +
+                      a[3] * (2. / (b[3] * r_cut ** 2) + 2. / r_cut + b[3]) * tf.exp(-b[3] * r_cut) +
+                      a[4] * (2. / (b[4] * r_cut ** 2) + 2. / r_cut + b[4]) * tf.exp(-b[4] * r_cut))
 
-        v_cut = (a[0] * (2. / (b[0] * r_cut) + 1) * tf.exp(-b[0] * r_cut) +
-                 a[1] * (2. / (b[1] * r_cut) + 1) * tf.exp(-b[1] * r_cut) +
-                 a[2] * (2. / (b[2] * r_cut) + 1) * tf.exp(-b[2] * r_cut) +
-                 a[3] * (2. / (b[3] * r_cut) + 1) * tf.exp(-b[3] * r_cut) +
-                 a[4] * (2. / (b[4] * r_cut) + 1) * tf.exp(-b[4] * r_cut))
+        v_cut = (a[0] * (2. / (b[0] * r_cut) + 1.) * tf.exp(-b[0] * r_cut) +
+                 a[1] * (2. / (b[1] * r_cut) + 1.) * tf.exp(-b[1] * r_cut) +
+                 a[2] * (2. / (b[2] * r_cut) + 1.) * tf.exp(-b[2] * r_cut) +
+                 a[3] * (2. / (b[3] * r_cut) + 1.) * tf.exp(-b[3] * r_cut) +
+                 a[4] * (2. / (b[4] * r_cut) + 1.) * tf.exp(-b[4] * r_cut))
 
         def func(r):
-            v = (a[0] * (2. / (b[0] * r) + 1) * tf.exp(-b[0] * r) +
-                 a[1] * (2. / (b[1] * r) + 1) * tf.exp(-b[1] * r) +
-                 a[2] * (2. / (b[2] * r) + 1) * tf.exp(-b[2] * r) +
-                 a[3] * (2. / (b[3] * r) + 1) * tf.exp(-b[3] * r) +
-                 a[4] * (2. / (b[4] * r) + 1) * tf.exp(-b[4] * r))
+            v = (a[0] * (2. / (b[0] * r) + 1.) * tf.exp(-b[0] * r) +
+                 a[1] * (2. / (b[1] * r) + 1.) * tf.exp(-b[1] * r) +
+                 a[2] * (2. / (b[2] * r) + 1.) * tf.exp(-b[2] * r) +
+                 a[3] * (2. / (b[3] * r) + 1.) * tf.exp(-b[3] * r) +
+                 a[4] * (2. / (b[4] * r) + 1.) * tf.exp(-b[4] * r))
 
             return v - v_cut - (r - r_cut) * dvdr_cut
 
@@ -135,20 +133,20 @@ class LobatoPotential(ParameterizedPotential):
 class KirklandPotential(ParameterizedPotential):
 
     def __init__(self, tolerance=1e-3):
-        super().__init__(filename='data/kirland.txt', tolerance=tolerance)
+        ParameterizedPotential.__init__(self, filename='data/kirland.txt', tolerance=tolerance)
 
     def _create_function(self, atomic_number):
         a = [np.pi * self.parameters[atomic_number][key] for key in ('a1', 'a2', 'a3')]
-        b = [2 * np.pi * tf.sqrt(self.parameters[atomic_number][key]) for key in ('b1', 'b2', 'b3')]
-        c = [np.pi ** (3 / 2.) * self.parameters[atomic_number][key_c] / self.parameters[atomic_number][key_d] ** (
-                3 / 2.) for key_c, key_d in
+        b = [2. * np.pi * tf.sqrt(self.parameters[atomic_number][key]) for key in ('b1', 'b2', 'b3')]
+        c = [np.pi ** (3. / 2.) * self.parameters[atomic_number][key_c] / self.parameters[atomic_number][key_d] ** (
+                3. / 2.) for key_c, key_d in
              zip(('c1', 'c2', 'c3'), ('d1', 'd2', 'd3'))]
         d = [np.pi ** 2 / self.parameters[atomic_number][key] for key in ('d1', 'd2', 'd3')]
 
         def func(r):
-            return (a[0] * tf.exp(-b[0] * r) / r + c[0] * tf.exp(-d[0] * r ** 2) +
-                    a[1] * tf.exp(-b[1] * r) / r + c[1] * tf.exp(-d[1] * r ** 2) +
-                    a[2] * tf.exp(-b[2] * r) / r + c[2] * tf.exp(-d[2] * r ** 2))
+            return (a[0] * tf.exp(-b[0] * r) / r + c[0] * tf.exp(-d[0] * r ** 2.) +
+                    a[1] * tf.exp(-b[1] * r) / r + c[1] * tf.exp(-d[1] * r ** 2.) +
+                    a[2] * tf.exp(-b[2] * r) / r + c[2] * tf.exp(-d[2] * r ** 2.))
 
         # dvdr = lambda r: (- a[0] * (1 / r + b[0]) * tf.exp(-b[0] * r) / r - 2 * c[0] * d[0] * r * tf.exp(-d[0] * r ** 2)
         #                   - a[1] * (1 / r + b[1]) * tf.exp(-b[1] * r) / r - 2 * c[1] * d[1] * r * tf.exp(-d[1] * r ** 2)
@@ -175,10 +173,10 @@ class Quadrature(object):
         return self._num_nodes
 
     def get_integrals(self, function, a, b, nodes):
-        xkab = self._quadrature['xk'][None, :] * ((b - a) / 2)[:, None] + ((a + b) / 2)[:, None]
-        wkab = self._quadrature['wk'][None, :] * ((b - a) / 2)[:, None]
+        xkab = self._quadrature['xk'][None, :] * ((b - a) / 2.)[:, None] + ((a + b) / 2.)[:, None]
+        wkab = self._quadrature['wk'][None, :] * ((b - a) / 2.)[:, None]
 
-        r = tf.sqrt(nodes[None, None, :] ** 2 + (xkab ** 2)[:, :, None])
+        r = tf.sqrt(nodes[None, None, :] ** 2. + (xkab ** 2.)[:, :, None])
         r = tf.clip_by_value(r, 0, nodes[-1])
         return tf.reduce_sum(function(r) * wkab[:, :, None], axis=1)
 
@@ -333,11 +331,11 @@ class Potential(HasData, Showable):
             positions = self.get_positions_in_slice(atomic_number, i)
 
             def create_nodes(r_min, r_cut):
-                dt = np.log(r_cut / r_min) / (self._quadrature.num_nodes - 1)
-                return (r_min * np.exp(dt * np.linspace(0., self._quadrature.num_nodes - 1,
+                dt = np.log(r_cut / r_min) / (self._quadrature.num_nodes - 1.)
+                return (r_min * np.exp(dt * np.linspace(0., self._quadrature.num_nodes - 1.,
                                                         self._quadrature.num_nodes))).astype(np.float32)
 
-            nodes = create_nodes(min(self.grid.sampling) / 2, self.parametrization.get_cutoff(atomic_number))
+            nodes = create_nodes(min(self.grid.sampling) / 2., self.parametrization.get_cutoff(atomic_number))
 
             if positions.shape[0] > 0:
                 block_margin = tf.cast(self.parametrization.get_cutoff(atomic_number) / min(self.grid.sampling),
@@ -517,7 +515,7 @@ def display_atoms(positions, numbers, plane, origin, box, scale=100, ax=None, co
     edges[0, 2:4] += np.array([box[0], box[1], box[2]])[axes[0]]
     edges[1, 1:3] += np.array([box[0], box[1], box[2]])[axes[1]]
 
-    ax.plot(*edges, 'k-')
+    ax.plot(edges[0, :], edges[1, :], 'k-')
 
     if len(positions) > 0:
         positions = positions[:, axes]

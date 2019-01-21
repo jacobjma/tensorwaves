@@ -1,3 +1,6 @@
+import sys
+sys.path.append("/Users/jacobmadsen/PycharmProjects/tensorwaves")
+
 import numpy as np
 import tensorflow as tf
 
