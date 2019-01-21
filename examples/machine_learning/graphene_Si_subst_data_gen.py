@@ -30,7 +30,7 @@ def random_graphene_Si_sheet(box=(8, 8, 4), edge_tol=.5, min_replace=1, max_repl
     return atoms
 
 
-num_examples = 10
+num_examples = 2
 num_positions = (48, 48)
 
 bar = ProgressBar(num_iter=num_examples, description='Example #')
@@ -57,3 +57,6 @@ for i in range(num_examples):
     example.create_image(prism=prism, detector=detector, tracker=tracker)
 
     examples.append(example)
+
+training_set = TrainingSetSTEM(examples=examples)
+training_set.save('test')
