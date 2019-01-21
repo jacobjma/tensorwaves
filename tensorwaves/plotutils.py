@@ -142,9 +142,18 @@ def add_colorbar(ax, mapable, position='right', size='5%', pad=0.05, **kwargs):
     return cax
 
 
-def display_atoms(positions, numbers, plane, origin, box, scale=100, ax=None, colors=None):
+def plane2axes(plane):
+    axes = ()
+    for axis in list(plane):
+        if axis == 'x': axes += (0,)
+        if axis == 'y': axes += (1,)
+        if axis == 'z': axes += (2,)
+    return axes
+
+
+def display_atoms(positions, numbers, plane, origin, box, scale=100, ax=None, colors=None, fig_scale=1):
     if ax is None:
-        fig, ax = plt.subplots()
+        fig, ax = plt.subplots(figsize=(8 * fig_scale, 6 * fig_scale))
 
     axes = plane2axes(plane)
     edges = np.zeros((2, 5))

@@ -393,7 +393,9 @@ class Potential(HasData, Showable):
 
     # self.get_tensor(i).show(mode=mode, space=space, **kwargs)
 
-    def show_atoms(self, plane='xy', scale=100, i=None, margin=True):
+    def show_atoms(self, plane='xy', scale=100, i=None, margin=True, fig_scale=1):
+
+        from tensorwaves.plotutils import display_atoms
 
         box = self.box
         origin = np.array([0., 0., 0.])
@@ -419,7 +421,7 @@ class Potential(HasData, Showable):
                 atomic_numbers.append([atomic_number] * len(self.get_positions_in_slice(atomic_number, i)))
 
         display_atoms(np.vstack(positions), np.hstack(atomic_numbers).astype(np.int), plane=plane, origin=origin,
-                      box=box, scale=scale)
+                      box=box, scale=scale, fig_scale=fig_scale)
 
 
 class ArrayPotential(Showable):
@@ -493,11 +495,3 @@ def potential_from_GPAW(calc):
     potential_array = -PS2AE(calc).get_electrostatic_potential(ae=True)
     return ArrayPotential(array=potential_array, box=np.diag(calc.atoms.cell))
 
-
-def plane2axes(plane):
-    axes = ()
-    for axis in list(plane):
-        if axis == 'x': axes += (0,)
-        if axis == 'y': axes += (1,)
-        if axis == 'z': axes += (2,)
-    return axes
