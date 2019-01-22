@@ -11,17 +11,17 @@ from tensorwaves.utils import batch_generator, ProgressBar
 
 class Scan(HasData):
 
-    def __init__(self, scanable, detectors, save_data=True):
+    def __init__(self, scanable, detectors=None, save_data=True):
         self._scanable = scanable
 
-        if not isinstance(detectors, Iterable):
-            detectors = (detectors,)
+        if detectors is not None:
+            if not isinstance(detectors, Iterable):
+                detectors = (detectors,)
 
-        for detector in detectors:
-            detector.register_observer(self)
+            for detector in detectors:
+                detector.register_observer(self)
 
         self._detectors = detectors
-
         self._num_positions = None
 
         HasData.__init__(self, save_data=save_data)
@@ -37,10 +37,23 @@ class Scan(HasData):
     def num_positions(self):
         return self._num_positions
 
-    def generate_positions(self, max_batch):
+    def generate_positions(self, max_batch, tracker=None):
         positions = self.get_positions()
-        for start, stop in batch_generator(positions.shape[0].value, max_batch):
+
+        num_iter = (np.prod(self.num_positions) + max_batch - 1) // max_batch
+
+        bar = ProgressBar(num_iter=num_iter, description='Scanning')
+
+        if tracker is not None:
+            tracker.add_bar(bar)
+
+        for i, (start, stop) in enumerate(batch_generator(positions.shape[0].value, max_batch)):
+            bar.update(i)
+
             yield positions[start:start + stop]
+        
+        if tracker is not None:
+            del tracker._output[bar]
 
     def read_detector(self, detector=None):
         data = self.get_data()
@@ -60,15 +73,7 @@ class Scan(HasData):
 
         data = OrderedDict(zip(self.detectors, [[]] * len(self.detectors)))
 
-        num_iter = (np.prod(self.num_positions) + max_batch - 1) // max_batch
-
-        bar = ProgressBar(num_iter=num_iter, description='Scanning')
-
-        if tracker is not None:
-            tracker.add_bar(bar)
-
         for i, positions in enumerate(self.generate_positions(max_batch)):
-            bar.update(i)
 
             # for positions in tqdm(self.generate_positions(max_batch), total=num_iter):
             self._scanable.translate.positions = positions
@@ -83,9 +88,6 @@ class Scan(HasData):
         # for detector in data.keys():
         #    data[detector] = tf.reshape(tf.concat(data[detector], axis=0), tf.reshape(self.num_positions, (-1,)))
 
-        if tracker is not None:
-            del tracker._output[bar]
-
         return data
 
     def generate_scan_positions(self, scan, max_batch=1):
@@ -94,7 +96,7 @@ class Scan(HasData):
 
 class LineScan(Scan):
 
-    def __init__(self, scanable, detectors, start, end, num_positions=None, sampling=None, endpoint=True):
+    def __init__(self, scanable, start, end, num_positions=None, detectors=None, sampling=None, endpoint=True):
         Scan.__init__(self, scanable=scanable, detectors=detectors)
 
         self._start = np.array(start, dtype=np.float32)
@@ -135,7 +137,8 @@ class LineScan(Scan):
 
 class GridScan(Scan):
 
-    def __init__(self, scanable, detectors, start=None, end=None, num_positions=None, sampling=None, endpoint=False):
+    def __init__(self, scanable, start=None, end=None, num_positions=None, detectors=None, sampling=None,
+                 endpoint=False):
 
         Scan.__init__(self, scanable=scanable, detectors=detectors)
 
