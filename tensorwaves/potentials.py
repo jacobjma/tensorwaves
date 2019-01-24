@@ -472,7 +472,7 @@ class ArrayPotential(Showable):
         origin = start * self.grid.sampling
 
         end = np.round((origin + extent) / self.grid.extent * self.grid.gpts).astype(np.int32)
-        repeat = np.ceil(end / self.grid.gpts).astype(int)
+        repeat = np.ceil(end / self.grid.gpts.astype(np.float)).astype(int)
 
         new_array = np.tile(self._array, np.append(repeat, 1))
 
