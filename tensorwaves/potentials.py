@@ -508,10 +508,10 @@ class ArrayPotential(Showable):
         N, M = self.grid.gpts
 
         X = np.fft.fft(self._array, axis=0)
-        self._array = np.fft.ifft((X[:N // 2] + X[-N // 2:]) / 2, axis=0).real
+        self._array = np.fft.ifft((X[:(N // 2), :] + X[-(N // 2):, :]) / 2., axis=0).real
 
         X = np.fft.fft(self._array, axis=1)
-        self._array = np.fft.ifft((X[:, :M // 2] + X[:, -M // 2:]) / 2, axis=1).real
+        self._array = np.fft.ifft((X[:, :(M // 2)] + X[:, -(M // 2):]) / 2., axis=1).real
 
         self.grid.extent = self.grid.extent
 
@@ -538,7 +538,7 @@ class ArrayPotential(Showable):
     def _create_tensor(self, i=None):
 
         if self._projected:
-            return tf.convert_to_tensor(self._array[..., i][None, :, :],dtype=tf.float32)
+            return tf.convert_to_tensor(self._array[..., i][None, :, :], dtype=tf.float32)
 
         return (tf.reduce_sum(self._array[:, :, i * self.slice_thickness_voxels:
                                                 i * self.slice_thickness_voxels + self.slice_thickness_voxels],
