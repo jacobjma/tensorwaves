@@ -538,7 +538,7 @@ class ArrayPotential(Showable):
     def _create_tensor(self, i=None):
 
         if self._projected:
-            return tf.convert_to_tensor(self._array[..., i][None, :, :])
+            return tf.convert_to_tensor(self._array[..., i][None, :, :],dtype=tf.float32)
 
         return (tf.reduce_sum(self._array[:, :, i * self.slice_thickness_voxels:
                                                 i * self.slice_thickness_voxels + self.slice_thickness_voxels],
