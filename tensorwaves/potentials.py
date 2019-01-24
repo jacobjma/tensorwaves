@@ -1,7 +1,6 @@
 import csv
 import os
 
-
 import numpy as np
 import tensorflow as tf
 
@@ -341,8 +340,14 @@ class Potential(HasData, Showable):
                                        tf.int32)
                 block_size = 2 * block_margin + 1
 
-                x = tf.linspace(0., tf.cast(block_size, tf.float32) * self.grid.sampling[0], block_size)[None, :]
-                y = tf.linspace(0., tf.cast(block_size, tf.float32) * self.grid.sampling[1], block_size)[None, :]
+                # print(block_size, )
+
+                x = tf.linspace(0., tf.cast(block_size, tf.float32) * self.grid.sampling[0] - self.grid.sampling[0],
+                                block_size)[None, :]
+                y = tf.linspace(0., tf.cast(block_size, tf.float32) * self.grid.sampling[1] - self.grid.sampling[1],
+                                block_size)[None, :]
+
+                # print(x)
 
                 block_indices = tf.range(0, block_size)[None, :] + \
                                 tf.range(0, block_size)[:, None] * padded_gpts[1]
@@ -423,35 +428,57 @@ class Potential(HasData, Showable):
         display_atoms(np.vstack(positions), np.hstack(atomic_numbers).astype(np.int), plane=plane, origin=origin,
                       box=box, scale=scale, fig_scale=fig_scale)
 
+    def to_array(self):
+
+        new_array = np.zeros(tuple(np.append(self.grid.gpts, self.num_slices)), dtype=np.float32)
+
+        for i, tensor in enumerate(self.slice_generator()):
+            new_array[..., i] = tensor
+
+        box = np.append(self.grid.extent, self.thickness)
+
+        return ArrayPotential(array=new_array, box=box, num_slices=self.num_slices, projected=True)
+
 
 class ArrayPotential(Showable):
 
-    def __init__(self, array, box, num_slices=None):
-        array = np.flip(array, axis=2)
+    def __init__(self, array, box, num_slices=None, projected=False):
 
-        self._array = tf.convert_to_tensor(array, dtype=tf.float32)
+        self._array = np.float32(array - array.min())
 
         if num_slices is None:
-            num_slices = np.ceil(array.shape[2] / (box[2] / .5)).astype(np.int32)
+            num_slices = np.ceil(box[2] / .5).astype(np.int32)
 
         if array.shape[2] % num_slices:
             raise RuntimeError()
 
         extent = box[:2]
-        gpts = GridProperty(lambda: np.array([dim.value for dim in self._array.shape[:2]]), dtype=np.int32, locked=True)
+        gpts = GridProperty(lambda: np.array([dim for dim in self._array.shape[:2]]), dtype=np.int32, locked=True)
 
         Showable.__init__(self, extent=extent, gpts=gpts, space='direct')
 
         self._thickness = box[2]
-
         self._num_slices = num_slices
-        # self._voxel_height = box[2] / array.shape[2]
-        # self._slice_thickness_voxels = array.shape[2] // num_slices
+        self._projected = projected
 
     def repeat(self, multiples):
         self._array = tf.tile(self._array, multiples)
         self.grid.extent = multiples[:2] * self.grid.extent
         self._thickness = multiples[2] * self._thickness
+
+    def set_view(self, origin, extent):
+
+        start = np.round(origin / self.grid.extent * self.grid.gpts).astype(np.int32)
+        origin = start * self.grid.sampling
+
+        end = np.round((origin + extent) / self.grid.extent * self.grid.gpts).astype(np.int32)
+        repeat = np.ceil(end / self.grid.gpts).astype(int)
+
+        new_array = np.tile(self._array, np.append(repeat, 1))
+
+        self._array = new_array[start[0]:end[0], start[1]:end[1], :]
+
+        self.grid.sampling = self.grid.sampling
 
     @property
     def box(self):
@@ -459,11 +486,11 @@ class ArrayPotential(Showable):
 
     @property
     def voxel_height(self):
-        return self.thickness / self._array.shape[2].value
+        return self.thickness / self._array.shape[2]
 
     @property
     def slice_thickness_voxels(self):
-        return self._array.shape[2].value // self.num_slices
+        return self._array.shape[2] // self.num_slices
 
     @property
     def thickness(self):
@@ -477,6 +504,30 @@ class ArrayPotential(Showable):
     def slice_thickness(self):
         return self.thickness / self.num_slices
 
+    def downsample(self):
+        N, M = self.grid.gpts
+
+        X = np.fft.fft(self._array, axis=0)
+        self._array = np.fft.ifft((X[:N // 2] + X[-N // 2:]) / 2, axis=0).real
+
+        X = np.fft.fft(self._array, axis=1)
+        self._array = np.fft.ifft((X[:, :M // 2] + X[:, -M // 2:]) / 2, axis=1).real
+
+        self.grid.extent = self.grid.extent
+
+    def project(self):
+        if self._projected:
+            raise RuntimeError()
+
+        new_array = np.zeros(tuple(np.append(self.grid.gpts, self.num_slices)), dtype=np.float32)
+
+        for i, tensor in enumerate(self.slice_generator()):
+            new_array[..., i] = tensor
+
+        self._array = new_array
+
+        self._projected = True
+
     def slice_generator(self):
         for i in range(self.num_slices):
             yield self._create_tensor(i)
@@ -485,13 +536,20 @@ class ArrayPotential(Showable):
         return Tensor(self._create_tensor(i), extent=self.grid.extent, space=self.space)
 
     def _create_tensor(self, i=None):
+
+        if self._projected:
+            return tf.convert_to_tensor(self._array[..., i][None, :, :])
+
         return (tf.reduce_sum(self._array[:, :, i * self.slice_thickness_voxels:
                                                 i * self.slice_thickness_voxels + self.slice_thickness_voxels],
                               axis=2) * self.voxel_height)[None, :, :]
+
+    def copy(self):
+        box = np.append(self.grid.extent, self.thickness)
+        return self.__class__(array=self._array.copy(), box=box, num_slices=self._num_slices, projected=self._projected)
 
 
 def potential_from_GPAW(calc):
     from gpaw.utilities.ps2ae import PS2AE
     potential_array = -PS2AE(calc).get_electrostatic_potential(ae=True)
     return ArrayPotential(array=potential_array, box=np.diag(calc.atoms.cell))
-

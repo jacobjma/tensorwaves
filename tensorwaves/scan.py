@@ -51,7 +51,7 @@ class Scan(HasData):
             bar.update(i)
 
             yield positions[start:start + stop]
-        
+
         if tracker is not None:
             del tracker._output[bar]
 
