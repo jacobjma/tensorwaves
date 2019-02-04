@@ -333,21 +333,17 @@ class Potential(HasData, Showable):
                 return (r_min * np.exp(dt * np.linspace(0., self._quadrature.num_nodes - 1.,
                                                         self._quadrature.num_nodes))).astype(np.float32)
 
-            nodes = create_nodes(min(self.grid.sampling) / 2., self.parametrization.get_cutoff(atomic_number))
+            nodes = create_nodes(min(self.grid.sampling) / 3., self.parametrization.get_cutoff(atomic_number))
 
             if positions.shape[0] > 0:
                 block_margin = tf.cast(self.parametrization.get_cutoff(atomic_number) / min(self.grid.sampling),
                                        tf.int32)
                 block_size = 2 * block_margin + 1
 
-                # print(block_size, )
-
                 x = tf.linspace(0., tf.cast(block_size, tf.float32) * self.grid.sampling[0] - self.grid.sampling[0],
                                 block_size)[None, :]
                 y = tf.linspace(0., tf.cast(block_size, tf.float32) * self.grid.sampling[1] - self.grid.sampling[1],
                                 block_size)[None, :]
-
-                # print(x)
 
                 block_indices = tf.range(0, block_size)[None, :] + \
                                 tf.range(0, block_size)[:, None] * padded_gpts[1]

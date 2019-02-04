@@ -7,6 +7,97 @@ from scipy.spatial.distance import cdist
 from tensorwaves.bases import HasGrid, GridProperty
 from tensorwaves.potentials import Potential
 from tensorwaves.scan import GridScan
+from tensorflow import keras
+import scipy.ndimage
+from sklearn.model_selection import train_test_split
+
+
+def regression_image_generator(X, Y, seed=0):
+    # X = scipy.ndimage.zoom(X, (1, 2, 2, 1))
+    # Y = scipy.ndimage.zoom(Y, (1, 2, 2, 1))
+
+    def image_preproccesing_function(x):
+        x = 1 + 2 * np.random.rand() + (x - x.min()) / (x.max() - x.min()) * 4 * (.2 + np.random.rand())
+        x = np.random.poisson(x).astype(float)
+        x += .5 * np.random.rand() * np.random.normal(0, 1, x.shape)
+        x -= np.min(x)
+        x = x ** (1 + .2 * 2 * (np.random.rand() - .5))
+        x -= np.min(x)
+        x /= np.std(x)
+        #x *= 1 + .2 * 2 * (np.random.rand() - .5)
+        #x += np.random.rand() * x.max() * .05
+        return x
+
+    def preprocessing(x, fliplr=False, flipud=False, rotation=0., zoom=1., rolllr=0, rollud=0):
+
+        if fliplr:
+            x = np.fliplr(x)
+
+        if flipud:
+            x = np.fliplr(x)
+
+        if rotation > 0.:
+            x = scipy.ndimage.rotate(x, rotation, reshape=False)
+
+        if zoom != 1.:
+            x_new = scipy.ndimage.zoom(x, (zoom, zoom, 1))
+            x_new = x_new[:x.shape[0], :x.shape[1], :]
+
+            x = np.zeros_like(x)
+            x[:x_new.shape[0], :x_new.shape[1], :] = x_new
+
+        if rolllr > 0:
+            x = np.roll(x, rolllr, axis=0)
+
+        if rollud > 0:
+            x = np.roll(x, rollud, axis=0)
+
+        return x
+
+    datagen_x = keras.preprocessing.image.ImageDataGenerator()
+    datagen_y = keras.preprocessing.image.ImageDataGenerator()
+
+    train_generator_x = datagen_x.flow(X, batch_size=16, seed=seed)
+    train_generator_y = datagen_y.flow(Y, batch_size=16, seed=seed)
+
+    train_generator = zip(train_generator_x, train_generator_y)
+
+    for X_batch, Y_batch in train_generator:
+
+        for i in range(X_batch.shape[0]):
+
+            X_batch[i] -= X_batch[i].min()
+
+            if np.random.random() < 0.5:
+                fliplr = True
+            else:
+                fliplr = False
+
+            if np.random.random() < 0.5:
+                flipud = True
+            else:
+                flipud = False
+
+            if np.random.random() < 0.5:
+                rotation = np.random.uniform(0., 360)
+            else:
+                rotation = 0.
+
+            zoom = np.random.uniform(.8, 1.2)
+            # zoom = 1
+            rolllr = np.round(np.random.uniform(0, X_batch[i].shape[0])).astype(int)
+            rollud = np.round(np.random.uniform(0, X_batch[i].shape[1])).astype(int)
+
+            X_batch[i] = preprocessing(X_batch[i], fliplr=fliplr, flipud=flipud, rotation=rotation, zoom=zoom,
+                                       rolllr=rolllr, rollud=rollud)
+            Y_batch[i] = preprocessing(Y_batch[i], fliplr=fliplr, flipud=flipud, rotation=rotation, zoom=zoom,
+                                       rolllr=rolllr, rollud=rollud)
+
+            Y_batch[i, ..., -1] = 1 - np.sum(Y_batch[i, ..., :-1], axis=2)
+
+            X_batch[i] = image_preproccesing_function(X_batch[i])
+
+        yield X_batch, Y_batch
 
 
 def cluster_and_classify(atoms, distance=1., fingerprints=None):
@@ -108,6 +199,15 @@ class TrainingSetSTEM(TrainingSet):
 
         return images, labels
 
+    def get_generators(self):
+        X, Y = self.as_tensors()
+        X_train, X_valid, Y_train, Y_valid = train_test_split(X, Y, test_size=0.15, random_state=2018)
+
+        train_generator = regression_image_generator(X_train, Y_train)
+        valid_generator = regression_image_generator(X_valid, Y_valid)
+
+        return train_generator, valid_generator
+
     @property
     def height(self):
         return self._examples[0].grid.gpts[0]
@@ -130,6 +230,12 @@ class TrainingSetSTEM(TrainingSet):
         for file in files:
             self._examples.append(load_training_example_stem(file))
 
+    def create_ground_truth(self, distance=None, fingerprints=None, gaussian_width=None, max_label=None):
+
+        for example in self._examples:
+            example.create_ground_truth(distance=distance, fingerprints=fingerprints, gaussian_width=gaussian_width,
+                                        max_label=max_label)
+
 
 class TrainingExampleSTEM(HasGrid):
 
@@ -149,6 +255,13 @@ class TrainingExampleSTEM(HasGrid):
     def num_classes(self):
         return np.max(self._class_labels) + 1
 
+    def scale_image(self, num_positions):
+
+        self.grid.gpts = num_positions
+
+        # for i, image in enumerate(self._images):
+        self._image = scipy.ndimage.zoom(self._image, (1, 2, 2))
+
     def classify(self, distance=None, fingerprints=None):
 
         if distance is None:
@@ -164,9 +277,11 @@ class TrainingExampleSTEM(HasGrid):
         self._cluster_labels = cluster_labels
         self._class_labels = class_labels
 
-    def create_truth(self, distance=None, fingerprints=None, gaussian_width=None, max_label=None):
+    def create_ground_truth(self, distance=None, fingerprints=None, gaussian_width=None, max_label=None):
 
         self.classify(distance, fingerprints)
+
+        # print(self._class_labels)
 
         self._truth = self._calculate_truth(self._cluster_labels, self._class_labels, gaussian_width,
                                             max_label=max_label)
