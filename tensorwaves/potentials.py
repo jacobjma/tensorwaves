@@ -158,7 +158,7 @@ class KirklandPotential(ParameterizedPotential):
 
 class Quadrature(object):
 
-    def __init__(self, num_samples=30, num_nodes=50):
+    def __init__(self, num_samples=200, num_nodes=100):
         self._num_nodes = num_nodes
 
         self._quadrature = {}
@@ -333,7 +333,7 @@ class Potential(HasData, Showable):
                 return (r_min * np.exp(dt * np.linspace(0., self._quadrature.num_nodes - 1.,
                                                         self._quadrature.num_nodes))).astype(np.float32)
 
-            nodes = create_nodes(min(self.grid.sampling) / 3., self.parametrization.get_cutoff(atomic_number))
+            nodes = create_nodes(min(self.grid.sampling) / 2., self.parametrization.get_cutoff(atomic_number))
 
             if positions.shape[0] > 0:
                 block_margin = tf.cast(self.parametrization.get_cutoff(atomic_number) / min(self.grid.sampling),

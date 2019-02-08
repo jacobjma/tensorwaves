@@ -78,7 +78,7 @@ class PrismAperture(HasData, HasAccelerator):
             tensor = tf.where(alpha > self.radius, tensor, tf.ones(alpha.shape))
         else:
             tensor = tf.cast(alpha < self.radius, tf.float32)
-        # tensor = tf.cast(alpha < self.radius, tf.float32)
+
         return tensor
 
         #

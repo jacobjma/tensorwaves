@@ -11,7 +11,7 @@ from tensorwaves.utils import batch_generator, ProgressBar
 
 class Scan(HasData):
 
-    def __init__(self, scanable, detectors=None, save_data=True):
+    def __init__(self, scanable=None, detectors=None, positions=None, save_data=True):
         self._scanable = scanable
 
         if detectors is not None:
@@ -22,12 +22,13 @@ class Scan(HasData):
                 detector.register_observer(self)
 
         self._detectors = detectors
-        self._num_positions = None
+        #self._num_positions = None
+        self._positions = positions
 
         HasData.__init__(self, save_data=save_data)
 
     def get_positions(self):
-        raise NotImplementedError()
+        return self._positions
 
     @property
     def detectors(self):
@@ -35,7 +36,7 @@ class Scan(HasData):
 
     @property
     def num_positions(self):
-        return self._num_positions
+        return self._positions.shape[0].value
 
     def generate_positions(self, max_batch, tracker=None):
         positions = self.get_positions()
@@ -137,7 +138,7 @@ class LineScan(Scan):
 
 class GridScan(Scan):
 
-    def __init__(self, scanable, start=None, end=None, num_positions=None, detectors=None, sampling=None,
+    def __init__(self, scanable=None, start=None, end=None, num_positions=None, detectors=None, sampling=None,
                  endpoint=False):
 
         Scan.__init__(self, scanable=scanable, detectors=detectors)
@@ -187,7 +188,27 @@ class GridScan(Scan):
         return self.read_detector()
 
     def get_positions(self):
-        x = tf.linspace(self._start[0], self._end[0], self._num_positions[0])
-        y = tf.linspace(self._start[1], self._end[1], self._num_positions[1])
-        y, x = tf.meshgrid(y, x)
-        return tf.stack((tf.reshape(x, (-1,)), tf.reshape(y, (-1,))), axis=1)
+        if self._positions is None:
+            x = tf.linspace(self._start[0], self._end[0], self._num_positions[0])
+            y = tf.linspace(self._start[1], self._end[1], self._num_positions[1])
+            y, x = tf.meshgrid(y, x)
+            self._positions = tf.stack((tf.reshape(x, (-1,)), tf.reshape(y, (-1,))), axis=1)
+
+        return self._positions
+
+    def split(self, n):
+        positions = self.get_positions()
+
+        N = positions.shape[0].value
+        m = N // n
+        scanners = []
+
+        i = 0
+        for i in range(n - 1):
+            scanners.append(Scan(scanable=self._scanable, detectors=self.detectors,
+                                 positions=positions[i * m:(i + 1) * m]))
+
+        scanners.append(Scan(scanable=self._scanable, detectors=self.detectors,
+                             positions=positions[(i + 1) * m:]))
+
+        return scanners

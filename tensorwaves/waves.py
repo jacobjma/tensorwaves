@@ -206,11 +206,17 @@ class ProbeWaves(WaveFactory, Scanable):
         WaveFactory.__init__(self, extent=extent, gpts=gpts, sampling=sampling, energy=energy, save_wave=save_wave,
                              grid=self._ctf.grid, accelerator=self._ctf.accelerator)
 
-        self._observing = self._ctf._observing + self._translate._observing + [self._translate]
-
     @property
     def ctf(self):
         return self._ctf
+
+    @property
+    def positions(self):
+        return self._translate.positions
+
+    @positions.setter
+    def positions(self, value):
+        self._translate.positions = value
 
     @property
     def translate(self):
@@ -363,13 +369,19 @@ class ScatteringMatrix(TensorWaves, HasData, Scanable):
     def get_showable_tensor(self):
         return self.get_data()
 
-    def _calculate_data(self):
-        tensor = self._aberrations.get_data()
-
-        tensor *= self._translate._calculate_data()
+    def get_coefficients(self):
+        coefficients = self._aberrations.get_data()
 
         if self._aperture.radius != np.inf:
-            tensor *= tf.cast(self._aperture._calculate_data(), tf.complex64)
+            coefficients *= tf.cast(self._aperture._calculate_data(), tf.complex64)
+
+        return coefficients
+
+    def _calculate_data(self):
+
+        coefficients = self.get_coefficients()
+
+        coefficients *= self._translate._calculate_data()
 
         begin = [0,
                  np.round((self.position[0] - self.grid.extent[0] / (2 * self.interpolation)) /
@@ -381,7 +393,7 @@ class ScatteringMatrix(TensorWaves, HasData, Scanable):
                 np.ceil(self.grid.gpts[0] / self.interpolation).astype(int),
                 np.ceil(self.grid.gpts[1] / self.interpolation).astype(int)]
 
-        tensor = tensor[:, None, None] * wrapped_slice(self._tensor, begin, size)
+        tensor = coefficients[:, None, None] * wrapped_slice(self._tensor, begin, size)
 
         return TensorWaves(tensor=tf.reduce_sum(tensor, axis=0, keep_dims=True),
                            extent=self._grid.extent / self.interpolation, energy=self._accelerator.energy)

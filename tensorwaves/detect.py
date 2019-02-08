@@ -76,6 +76,19 @@ class FullFieldDetector(Detector):
         return Image(intensity, extent=wave.grid.extent)
 
 
+class PtychographyDetector(Detector):
+
+    def __init__(self, extent=None, gpts=None, sampling=None, energy=None, save_data=True, grid=None, accelerator=None):
+
+        Detector.__init__(self, extent=extent, gpts=gpts, sampling=sampling, energy=energy, space='direct',
+                          save_data=save_data, grid=grid, accelerator=accelerator)
+
+    def detect(self, wave):
+        intensity = tf.abs(tf.fft2d(wave.get_tensor().tensorflow())) ** 2
+
+        return Image(intensity, extent=wave.grid.extent)
+
+
 class WaveDetector(Detector):
     def __init__(self, extent=None, gpts=None, sampling=None, energy=None, save_data=True, grid=None, accelerator=None):
         Detector.__init__(self, extent=extent, gpts=gpts, sampling=sampling, energy=energy, space='direct',
