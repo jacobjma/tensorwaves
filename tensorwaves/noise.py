@@ -1,10 +1,11 @@
 import numpy as np
 
-from tensorwaves.utils import fftfreq2d
-
+from tensorwaves.bases import fftfreq
+#import tensorflow
 
 def spectral_noise(gpts, sampling, func):
-    kx, ky = fftfreq2d(gpts, sampling)
+    kx = np.fft.fftfreq(gpts[0], sampling[0])
+    ky = np.fft.fftfreq(gpts[1], sampling[1])
     k = np.sqrt(kx[:, None] ** 2 + ky[None, :] ** 2)
 
     abs_F = func(k)
@@ -26,8 +27,8 @@ def power_law_noise(gpts, sampling, power):
 
     noise = spectral_noise(gpts, sampling, fit_func)
 
-    #import matplotlib.pyplot as plt
-    #plt.imshow(noise)
-    #plt.show()
+    # import matplotlib.pyplot as plt
+    # plt.imshow(noise)
+    # plt.show()
 
     return noise

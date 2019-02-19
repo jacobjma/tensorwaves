@@ -3,14 +3,43 @@ import os
 
 import numpy as np
 import tensorflow as tf
+from ase import units
 
 from scipy.optimize import brentq
 
-from tensorwaves.bases import Tensor, HasData, Showable, GridProperty
-from tensorwaves.utils import kappa_ASE, batch_generator
+from tensorwaves.bases import Tensor, TensorFactory, HasGrid
+from tensorwaves.utils import batch_generator
+
+eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
+kappa = 4 * np.pi * eps0 / (2 * np.pi * units.Bohr * units._e * units.C)
 
 
-class ParameterizedPotential(object):
+def log_grid(start, stop, num):
+    """
+    Return numbers spaced evenly on a log scale over the closed interval [start, stop].
+
+    Parameters
+    ----------
+    start : scalar
+        The starting value of the interval.
+    stop : scalar
+        The end value of the interval.
+    num : int
+        Number of samples to generate.
+
+    Returns
+    -------
+    samples : tensor
+        There are num samples in the closed interval [start, stop] spaced evenly on a logarithmic scale.
+
+    """
+    start = tf.cast(start, tf.float32)
+    stop = tf.cast(stop, tf.float32)
+    dt = tf.log(stop / start) / (num - 1)
+    return tf.cast(start * tf.exp(dt * tf.lin_space(0., num - 1, num)), tf.float32)
+
+
+class PotentialParameterization(object):
 
     def __init__(self, filename=None, parameters=None, tolerance=1e-2):
 
@@ -19,16 +48,22 @@ class ParameterizedPotential(object):
         self._functions = {}
         self._soft_functions = {}
 
-        self.filename = filename
+        self._filename = filename
         if parameters is None:
-            self.parameters = self.load_parameters(self.filename)
+            self.load_parameters()
+        else:
+            self._parameters = parameters
+
+    @property
+    def parameters(self):
+        return self._parameters
 
     @property
     def tolerance(self):
         return self._tolerance
 
-    def load_parameters(self, filename):
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+    def load_parameters(self):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), self._filename)
         parameters = {}
         with open(path, 'r') as csvfile:
             reader = csv.reader(csvfile, delimiter=',')
@@ -37,7 +72,7 @@ class ParameterizedPotential(object):
             for _, row in enumerate(reader):
                 values = list(map(float, row))
                 parameters[int(row[0])] = dict(zip(keys, values))
-        return parameters
+        self._parameters = parameters
 
     def _create_projected_function(self, atomic_number):
         raise RuntimeError()
@@ -74,18 +109,21 @@ class ParameterizedPotential(object):
             return self._soft_functions[atomic_number]
 
 
-class LobatoPotential(ParameterizedPotential):
+class LobatoPotential(PotentialParameterization):
 
-    def __init__(self, tolerance=1e-2):
-        ParameterizedPotential.__init__(self, filename='data/lobato.txt', tolerance=tolerance)
+    def __init__(self, tolerance=1e-3):
+        PotentialParameterization.__init__(self, filename='data/lobato.txt', tolerance=tolerance)
 
-    def _create_function(self, atomic_number):
-        a = [np.float32(np.pi ** 2 * self.parameters[atomic_number][key_a] /
-                        self.parameters[atomic_number][key_b] ** (3 / 2.))
+    def _convert_coefficients(self, atomic_number):
+        a = [np.pi ** 2 * self.parameters[atomic_number][key_a] / self.parameters[atomic_number][key_b] ** (3 / 2.)
              for key_a, key_b in zip(('a1', 'a2', 'a3', 'a4', 'a5'), ('b1', 'b2', 'b3', 'b4', 'b5'))]
 
-        b = [2 * np.pi / tf.sqrt(self.parameters[atomic_number][key]) for key in
-             ('b1', 'b2', 'b3', 'b4', 'b5')]
+        b = [2 * np.pi / tf.sqrt(self.parameters[atomic_number][key]) for key in ('b1', 'b2', 'b3', 'b4', 'b5')]
+
+        return (tf.cast(x, dtype=tf.float32) for x in (a, b))
+
+    def _create_function(self, atomic_number):
+        a, b = self._convert_coefficients(atomic_number)
 
         def func(r):
             return (a[0] * (2. / (b[0] * r) + 1.) * tf.exp(-b[0] * r) +
@@ -97,9 +135,9 @@ class LobatoPotential(ParameterizedPotential):
         return func
 
     def _create_soft_function(self, atomic_number, r_cut):
-        a = [np.pi ** 2 * self.parameters[atomic_number][key_a] / self.parameters[atomic_number][key_b] ** (3 / 2.)
-             for key_a, key_b in zip(('a1', 'a2', 'a3', 'a4', 'a5'), ('b1', 'b2', 'b3', 'b4', 'b5'))]
-        b = [2 * np.pi / tf.sqrt(self.parameters[atomic_number][key]) for key in ('b1', 'b2', 'b3', 'b4', 'b5')]
+        a, b = self._convert_coefficients(atomic_number)
+
+        r_cut = tf.cast(r_cut, tf.float32)
 
         dvdr_cut = - (a[0] * (2. / (b[0] * r_cut ** 2) + 2. / r_cut + b[0]) * tf.exp(-b[0] * r_cut) +
                       a[1] * (2. / (b[1] * r_cut ** 2) + 2. / r_cut + b[1]) * tf.exp(-b[1] * r_cut) +
@@ -114,6 +152,8 @@ class LobatoPotential(ParameterizedPotential):
                  a[4] * (2. / (b[4] * r_cut) + 1.) * tf.exp(-b[4] * r_cut))
 
         def func(r):
+            r = tf.clip_by_value(r, 0, r_cut)
+
             v = (a[0] * (2. / (b[0] * r) + 1.) * tf.exp(-b[0] * r) +
                  a[1] * (2. / (b[1] * r) + 1.) * tf.exp(-b[1] * r) +
                  a[2] * (2. / (b[2] * r) + 1.) * tf.exp(-b[2] * r) +
@@ -128,12 +168,12 @@ class LobatoPotential(ParameterizedPotential):
         pass
 
 
-class KirklandPotential(ParameterizedPotential):
+class KirklandPotential(PotentialParameterization):
 
     def __init__(self, tolerance=1e-3):
-        ParameterizedPotential.__init__(self, filename='data/kirland.txt', tolerance=tolerance)
+        PotentialParameterization.__init__(self, filename='data/kirkland.txt', tolerance=tolerance)
 
-    def _create_function(self, atomic_number):
+    def _convert_coefficients(self, atomic_number):
         a = [np.pi * self.parameters[atomic_number][key] for key in ('a1', 'a2', 'a3')]
         b = [2. * np.pi * tf.sqrt(self.parameters[atomic_number][key]) for key in ('b1', 'b2', 'b3')]
         c = [np.pi ** (3. / 2.) * self.parameters[atomic_number][key_c] / self.parameters[atomic_number][key_d] ** (
@@ -141,67 +181,130 @@ class KirklandPotential(ParameterizedPotential):
              zip(('c1', 'c2', 'c3'), ('d1', 'd2', 'd3'))]
         d = [np.pi ** 2 / self.parameters[atomic_number][key] for key in ('d1', 'd2', 'd3')]
 
+        return (tf.cast(x, dtype=tf.float32) for x in (a, b, c, d))
+
+    def _create_function(self, atomic_number):
+        a, b, c, d = self._convert_coefficients(atomic_number)
+
         def func(r):
             return (a[0] * tf.exp(-b[0] * r) / r + c[0] * tf.exp(-d[0] * r ** 2.) +
                     a[1] * tf.exp(-b[1] * r) / r + c[1] * tf.exp(-d[1] * r ** 2.) +
                     a[2] * tf.exp(-b[2] * r) / r + c[2] * tf.exp(-d[2] * r ** 2.))
 
-        # dvdr = lambda r: (- a[0] * (1 / r + b[0]) * tf.exp(-b[0] * r) / r - 2 * c[0] * d[0] * r * tf.exp(-d[0] * r ** 2)
-        #                   - a[1] * (1 / r + b[1]) * tf.exp(-b[1] * r) / r - 2 * c[1] * d[1] * r * tf.exp(-d[1] * r ** 2)
-        #                   - a[2] * (1 / r + b[2]) * tf.exp(-b[2] * r) / r - 2 * c[2] * d[2] * r * tf.exp(
-        #             -d[2] * r ** 2))
         return func
 
     def _create_soft_function(self, atomic_number, r_cut):
-        pass
+        a, b, c, d = self._convert_coefficients(atomic_number)
+
+        r_cut = tf.cast(r_cut, tf.float32)
+
+        dvdr_cut = (- a[0] * (1 / r_cut + b[0]) * tf.exp(-b[0] * r_cut) / r_cut -
+                    2 * c[0] * d[0] * r_cut * tf.exp(-d[0] * r_cut ** 2)
+                    - a[1] * (1 / r_cut + b[1]) * tf.exp(-b[1] * r_cut) / r_cut -
+                    2 * c[1] * d[1] * r_cut * tf.exp(-d[1] * r_cut ** 2)
+                    - a[2] * (1 / r_cut + b[2]) * tf.exp(-b[2] * r_cut) / r_cut -
+                    2 * c[2] * d[2] * r_cut * tf.exp(-d[2] * r_cut ** 2))
+
+        v_cut = (a[0] * tf.exp(-b[0] * r_cut) / r_cut + c[0] * tf.exp(-d[0] * r_cut ** 2.) +
+                 a[1] * tf.exp(-b[1] * r_cut) / r_cut + c[1] * tf.exp(-d[1] * r_cut ** 2.) +
+                 a[2] * tf.exp(-b[2] * r_cut) / r_cut + c[2] * tf.exp(-d[2] * r_cut ** 2.))
+
+        def func(r):
+            r = tf.clip_by_value(r, 0, r_cut)
+
+            v = (a[0] * tf.exp(-b[0] * r) / r + c[0] * tf.exp(-d[0] * r ** 2.) +
+                 a[1] * tf.exp(-b[1] * r) / r + c[1] * tf.exp(-d[1] * r ** 2.) +
+                 a[2] * tf.exp(-b[2] * r) / r + c[2] * tf.exp(-d[2] * r ** 2.))
+
+            return v - v_cut - (r - r_cut) * dvdr_cut
+
+        return func
+
+    def _create_projected_function(self, atomic_number):
+        from scipy.special import kn
+
+        a, b, c, d = self._convert_coefficients(atomic_number)
+
+        def func(r):
+            v = (2 * a[0] * kn(0, b[0] * r) + tf.sqrt(np.pi / d[0]) * c[0] * tf.exp(-d[0] * r ** 2.) +
+                 2 * a[1] * kn(0, b[1] * r) + tf.sqrt(np.pi / d[1]) * c[1] * tf.exp(-d[1] * r ** 2.) +
+                 2 * a[2] * kn(0, b[2] * r) + tf.sqrt(np.pi / d[2]) * c[2] * tf.exp(-d[2] * r ** 2.))
+
+            return v
+
+        return func
 
 
-class Quadrature(object):
+class PotentialProjector(object):
 
-    def __init__(self, num_samples=200, num_nodes=100):
-        self._num_nodes = num_nodes
+    def __init__(self, num_samples=200, quadrature='riemann'):
 
-        self._quadrature = {}
-        self._quadrature['xk'] = np.linspace(-1., 1., num_samples + 1).astype(np.float32)
-        self._quadrature['wk'] = self._quadrature['xk'][1:] - self._quadrature['xk'][:-1]
-        self._quadrature['xk'] = self._quadrature['xk'][:-1]
+        self._quadrature = quadrature.lower()
 
-    @property
-    def num_nodes(self):
-        return self._num_nodes
+        if self._quadrature == 'riemann':
+            self._xk = np.linspace(-1., 1., num_samples + 1).astype(np.float32)
+            self._wk = self._xk[1:] - self._xk[:-1]
+            self._xk = self._xk[:-1]
 
-    def get_integrals(self, function, a, b, nodes):
-        xkab = self._quadrature['xk'][None, :] * ((b - a) / 2.)[:, None] + ((a + b) / 2.)[:, None]
-        wkab = self._quadrature['wk'][None, :] * ((b - a) / 2.)[:, None]
+        elif self._quadrature == 'tanh-sinh':
+            raise NotImplementedError()
 
-        r = tf.sqrt(nodes[None, None, :] ** 2. + (xkab ** 2.)[:, :, None])
-        r = tf.clip_by_value(r, 0, nodes[-1])
-        return tf.reduce_sum(function(r) * wkab[:, :, None], axis=1)
-
-
-class Potential(HasData, Showable):
-
-    def __init__(self, atoms=None, origin=None, extent=None, gpts=None, sampling=None, slice_thickness=.5,
-                 parametrization='lobato', periodic=True, method='splines', atoms_per_loop=10, tolerance=1e-2,
-                 save_data=True, grid=None):
-
-        HasData.__init__(self, save_data=save_data)
-        Showable.__init__(self, extent=extent, gpts=gpts, sampling=sampling, grid=grid, space='direct')
-
-        if isinstance(parametrization, str):
-            if parametrization.lower() == 'lobato':
-                self._parametrization = LobatoPotential(tolerance=tolerance)
-            else:
-                raise RuntimeError()
         else:
             raise RuntimeError()
 
+    def project(self, function, r, a, b):
+
+        c = tf.reshape(((b - a) / 2.), (-1, 1))
+        d = tf.reshape(((b + a) / 2.), (-1, 1))
+
+        xkab = self._xk[None, :] * c + d
+        wkab = self._wk[None, :] * c
+
+        rxy = tf.sqrt(r[None, None, :] ** 2. + (xkab ** 2.)[:, :, None])
+        rxy = tf.clip_by_value(rxy, 0, r[-1])
+        return tf.reduce_sum(function(rxy) * wkab[:, :, None], axis=1)
+
+
+class Potential(TensorFactory, HasGrid):
+
+    def __init__(self, atoms=None, origin=None, extent=None, gpts=None, sampling=None, slice_thickness=.5,
+                 num_slices=None, parametrization='lobato', periodic=True, method='splines', atoms_per_loop=10,
+                 tolerance=1e-2, num_nodes=50, save_tensor=True):
+
+        TensorFactory.__init__(self, save_tensor=save_tensor)
+        HasGrid.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
+
+        self._atoms = None
+        self._species = None
+        self._origin = None
+        self._positions = None
         self.set_atoms(atoms, origin=origin, extent=extent)
 
-        self._slice_thickness = slice_thickness
+        if num_slices is None:
+            self._slice_thickness = slice_thickness
+        else:
+            self._slice_thickness = self.thickness / num_slices
 
-        self._quadrature = Quadrature()
+        self._periodic = periodic
+        self._method = method
         self._atoms_per_loop = atoms_per_loop
+        self._projector = PotentialProjector(num_samples=100)
+        self._num_nodes = num_nodes
+
+        if isinstance(parametrization, str):
+            if parametrization == 'lobato':
+                parametrization = LobatoPotential(tolerance=tolerance)
+            else:
+                raise RuntimeError()
+
+        self._parametrization = parametrization
+        self._current_slice = 0
+
+        if periodic is False:
+            raise NotImplementedError()
+
+        if method != 'splines':
+            raise NotImplementedError()
 
     @property
     def atoms(self):
@@ -225,48 +328,61 @@ class Potential(HasData, Showable):
 
     @property
     def num_slices(self):
-        return np.ceil(self.thickness / self.slice_thickness).astype(np.int32)
+        return np.ceil(self.thickness / self._slice_thickness).astype(np.int32)
 
     @property
     def slice_thickness(self):
-        return self._slice_thickness
+        return self.thickness / self.num_slices
 
-    def slice_entrance(self, i):
-        return i * self.slice_thickness
+    @property
+    def current_slice(self):
+        return self._current_slice
 
-    def slice_exit(self, i):
-        return (i + 1) * self.slice_thickness
+    @current_slice.setter
+    def current_slice(self, value):
+        if value >= self.num_slices:
+            raise RuntimeError('')
+
+        self._current_slice = value
+
+    @property
+    def slice_entrance(self):
+        return self.current_slice * self.slice_thickness
+
+    @property
+    def slice_exit(self):
+        return (self.current_slice + 1) * self.slice_thickness
+
+    def check_is_defined(self):
+        self._grid.check_is_defined()
 
     def set_atoms(self, atoms, origin=None, extent=None):
         self._atoms = atoms
+        self._species = list(np.unique(self.atoms.get_atomic_numbers()))
+        self.new_view(origin=origin, extent=extent)
 
-        self._unique_atomic_numbers = np.unique(self.atoms.get_atomic_numbers())
-
-        self.set_view(origin=origin, extent=extent)
-
-    def set_view(self, origin=None, extent=None):
+    def new_view(self, origin=None, extent=None):
         if origin is None:
             self._origin = np.zeros(2, dtype=np.float32)
         else:
             self._origin = np.array(origin, dtype=np.float32)
 
         if extent is None:
-            self._grid.extent = np.diag(self.atoms.get_cell())[:2]
+            self.extent = np.diag(self._atoms.get_cell())[:2]
         else:
-            self._origin = np.array(extent, dtype=np.float32)
+            self.extent = np.array(extent, dtype=np.float32)
 
         self._positions = {}
 
-    def get_margin(self):
-        cutoffs = [self.parametrization.get_cutoff(atomic_number) for atomic_number in self._unique_atomic_numbers]
-        return max(cutoffs)
-
     def get_positions(self, atomic_number):
-        try:
-            return self._positions[atomic_number]
-        except KeyError:
-            self._positions[atomic_number] = (self._update_view(atomic_number)).astype(np.float32)
-            return self._positions[atomic_number]
+
+        if atomic_number not in self._species:
+            raise RuntimeError()
+
+        if atomic_number not in self._positions.keys():
+            self._update_view(atomic_number)
+
+        return self._positions[atomic_number]
 
     def _update_view(self, atomic_number):
 
@@ -293,75 +409,73 @@ class Potential(HasData, Showable):
 
             return positions
 
-        new_positions = np.zeros((0, 3))
         positions = self.atoms.get_positions()[np.where(self.atoms.get_atomic_numbers() == atomic_number)[0]]
         positions[:, :2] = (positions[:, :2] - self.origin) % np.diag(self.atoms.get_cell())[:2]
         cutoff = self.parametrization.get_cutoff(atomic_number)
 
-        positions = add_margin(positions, np.diag(self.atoms.get_cell())[:2],
-                               self.grid.extent, cutoff)
+        positions = add_margin(positions, np.diag(self.atoms.get_cell())[:2], self.extent, cutoff)
 
-        positions = positions[(positions[:, 0] < (self.grid.extent[0] + cutoff)) &
-                              (positions[:, 1] < (self.grid.extent[1] + cutoff)), :]
+        positions = positions[(positions[:, 0] < (self.extent[0] + cutoff)) &
+                              (positions[:, 1] < (self.extent[1] + cutoff)), :]
 
-        return np.concatenate((new_positions, positions))
+        self._positions[atomic_number] = positions.astype(np.float32)
 
-    def get_positions_in_slice(self, atomic_number, i):
+    def get_margin(self):
+        cutoffs = [self.parametrization.get_cutoff(atomic_number) for atomic_number in self._species]
+        return max(cutoffs)
+
+    def get_positions_in_slice(self, atomic_number):
         positions = self.get_positions(atomic_number)
         cutoff = self.parametrization.get_cutoff(atomic_number)
-        return positions[np.abs(self.slice_entrance(i) + self.slice_thickness / 2 - positions[:, 2]) < (
+        return positions[np.abs(self.slice_entrance + self.slice_thickness / 2 - positions[:, 2]) < (
                 cutoff + self.slice_thickness / 2)]
 
     def slice_generator(self):
         for i in range(self.num_slices):
-            yield self._create_tensor(i)
+            yield self._calculate_tensor()
 
-    def get_tensor(self, i=0):
-        return Tensor(self._create_tensor(i), extent=self.grid.extent, space=self.space)
+    def get_tensor(self):
+        return Tensor(self._calculate_tensor(), extent=self.extent, space='direct')
 
-    def _create_tensor(self, i=None):
-        margin = (self.get_margin() / min(self.grid.sampling)).astype(np.int32)
-        padded_gpts = self.grid.gpts + 2 * margin
+    def _calculate_tensor(self):
+        self.check_is_defined()
 
-        v = tf.contrib.eager.Variable(tf.zeros(np.prod(padded_gpts)))
+        margin = (self.get_margin() / min(self.sampling)).astype(np.int32)
+        padded_gpts = self.gpts + 2 * margin
 
-        for atomic_number in self._unique_atomic_numbers:
-            positions = self.get_positions_in_slice(atomic_number, i)
+        v = tf.contrib.eager.Variable(tf.zeros(padded_gpts[0] * padded_gpts[1]))
 
-            def create_nodes(r_min, r_cut):
-                dt = np.log(r_cut / r_min) / (self._quadrature.num_nodes - 1.)
-                return (r_min * np.exp(dt * np.linspace(0., self._quadrature.num_nodes - 1.,
-                                                        self._quadrature.num_nodes))).astype(np.float32)
+        for atomic_number in self._species:
+            positions = self.get_positions_in_slice(atomic_number)
 
-            nodes = create_nodes(min(self.grid.sampling) / 2., self.parametrization.get_cutoff(atomic_number))
+            nodes = log_grid(min(self.sampling) / 2., self.parametrization.get_cutoff(atomic_number), self._num_nodes)
 
             if positions.shape[0] > 0:
-                block_margin = tf.cast(self.parametrization.get_cutoff(atomic_number) / min(self.grid.sampling),
+                block_margin = tf.cast(self.parametrization.get_cutoff(atomic_number) / min(self.sampling),
                                        tf.int32)
                 block_size = 2 * block_margin + 1
 
-                x = tf.linspace(0., tf.cast(block_size, tf.float32) * self.grid.sampling[0] - self.grid.sampling[0],
+                x = tf.linspace(0., tf.cast(block_size, tf.float32) * self.sampling[0] - self.sampling[0],
                                 block_size)[None, :]
-                y = tf.linspace(0., tf.cast(block_size, tf.float32) * self.grid.sampling[1] - self.grid.sampling[1],
+                y = tf.linspace(0., tf.cast(block_size, tf.float32) * self.sampling[1] - self.sampling[1],
                                 block_size)[None, :]
 
                 block_indices = tf.range(0, block_size)[None, :] + \
                                 tf.range(0, block_size)[:, None] * padded_gpts[1]
 
-                a = self.slice_entrance(i) - positions[:, 2]
-                b = self.slice_exit(i) - positions[:, 2]
+                a = self.slice_entrance - positions[:, 2]
+                b = self.slice_exit - positions[:, 2]
 
-                radials = self._quadrature.get_integrals(self.parametrization.get_soft_function(atomic_number), a, b,
-                                                         nodes)
+                radials = self._projector.project(self.parametrization.get_soft_function(atomic_number), nodes, a, b)
 
                 for start, size in batch_generator(positions.shape[0], self._atoms_per_loop):
                     batch_positions = tf.slice(positions, [start, 0], [size, -1])
 
-                    corner_positions = tf.cast(tf.round(batch_positions[:, :2] / self.grid.sampling),
+                    corner_positions = tf.cast(tf.round(batch_positions[:, :2] / self.sampling),
                                                tf.int32) - block_margin + margin
 
-                    block_positions = (batch_positions[:, :2] + self.grid.sampling * margin
-                                       - self.grid.sampling * tf.cast(corner_positions, tf.float32))
+                    block_positions = (batch_positions[:, :2] + self.sampling * margin
+                                       - self.sampling * tf.cast(corner_positions, tf.float32))
 
                     batch_radials = tf.slice(radials, [start, 0], [size, -1])
 
@@ -383,18 +497,11 @@ class Potential(HasData, Showable):
                     tf.scatter_nd_add(v, indices, v_interp)
 
         v = tf.reshape(v, padded_gpts)
-        v = tf.slice(v, (margin, margin), self.grid.gpts)
+        v = tf.slice(v, (margin, margin), self.gpts)
 
-        return v[None, :, :] / kappa_ASE
+        return v[None, :, :] / kappa
 
-    def get_showable_tensor(self, i=0):
-        return self.get_tensor(i=i)
-
-    # def show(self, i=0, mode='magnitude', space='direct', color_scale='linear', **kwargs):
-
-    # self.get_tensor(i).show(mode=mode, space=space, **kwargs)
-
-    def show_atoms(self, plane='xy', scale=100, i=None, margin=True, fig_scale=1):
+    def show_atoms(self, plane='xy', scale=100, margin=True, fig_scale=1):
 
         from tensorwaves.plotutils import display_atoms
 
@@ -415,137 +522,136 @@ class Potential(HasData, Showable):
 
         else:
             box[2] = self.slice_thickness
-            origin[2] = self.slice_entrance(i)
+            origin[2] = self.slice_entrance
 
             for atomic_number in np.unique(self.atoms.get_atomic_numbers()):
-                positions.append(self.get_positions_in_slice(atomic_number, i))
-                atomic_numbers.append([atomic_number] * len(self.get_positions_in_slice(atomic_number, i)))
+                positions.append(self.get_positions_in_slice(atomic_number))
+                atomic_numbers.append([atomic_number] * len(self.get_positions_in_slice(atomic_number)))
 
         display_atoms(np.vstack(positions), np.hstack(atomic_numbers).astype(np.int), plane=plane, origin=origin,
                       box=box, scale=scale, fig_scale=fig_scale)
 
     def to_array(self):
 
-        new_array = np.zeros(tuple(np.append(self.grid.gpts, self.num_slices)), dtype=np.float32)
+        new_array = np.zeros(tuple(np.append(self.gpts, self.num_slices)), dtype=np.float32)
 
         for i, tensor in enumerate(self.slice_generator()):
             new_array[..., i] = tensor
 
-        box = np.append(self.grid.extent, self.thickness)
+        box = np.append(self.extent, self.thickness)
 
         return ArrayPotential(array=new_array, box=box, num_slices=self.num_slices, projected=True)
 
-
-class ArrayPotential(Showable):
-
-    def __init__(self, array, box, num_slices=None, projected=False):
-
-        self._array = np.float32(array - array.min())
-
-        if num_slices is None:
-            num_slices = np.ceil(box[2] / .5).astype(np.int32)
-
-        if array.shape[2] % num_slices:
-            raise RuntimeError()
-
-        extent = box[:2]
-        gpts = GridProperty(lambda: np.array([dim for dim in self._array.shape[:2]]), dtype=np.int32, locked=True)
-
-        Showable.__init__(self, extent=extent, gpts=gpts, space='direct')
-
-        self._thickness = box[2]
-        self._num_slices = num_slices
-        self._projected = projected
-
-    def repeat(self, multiples):
-        self._array = tf.tile(self._array, multiples)
-        self.grid.extent = multiples[:2] * self.grid.extent
-        self._thickness = multiples[2] * self._thickness
-
-    def set_view(self, origin, extent):
-
-        start = np.round(origin / self.grid.extent * self.grid.gpts).astype(np.int32)
-        origin = start * self.grid.sampling
-
-        end = np.round((origin + extent) / self.grid.extent * self.grid.gpts).astype(np.int32)
-        repeat = np.ceil(end / self.grid.gpts.astype(np.float)).astype(int)
-
-        new_array = np.tile(self._array, np.append(repeat, 1))
-
-        self._array = new_array[start[0]:end[0], start[1]:end[1], :]
-
-        self.grid.sampling = self.grid.sampling
-
-    @property
-    def box(self):
-        return np.concatenate((self.grid.extent, [self.thickness]))
-
-    @property
-    def voxel_height(self):
-        return self.thickness / self._array.shape[2]
-
-    @property
-    def slice_thickness_voxels(self):
-        return self._array.shape[2] // self.num_slices
-
-    @property
-    def thickness(self):
-        return self._thickness
-
-    @property
-    def num_slices(self):
-        return self._num_slices
-
-    @property
-    def slice_thickness(self):
-        return self.thickness / self.num_slices
-
-    def downsample(self):
-        N, M = self.grid.gpts
-
-        X = np.fft.fft(self._array, axis=0)
-        self._array = np.fft.ifft((X[:(N // 2), :] + X[-(N // 2):, :]) / 2., axis=0).real
-
-        X = np.fft.fft(self._array, axis=1)
-        self._array = np.fft.ifft((X[:, :(M // 2)] + X[:, -(M // 2):]) / 2., axis=1).real
-
-        self.grid.extent = self.grid.extent
-
-    def project(self):
-        if self._projected:
-            raise RuntimeError()
-
-        new_array = np.zeros(tuple(np.append(self.grid.gpts, self.num_slices)), dtype=np.float32)
-
-        for i, tensor in enumerate(self.slice_generator()):
-            new_array[..., i] = tensor
-
-        self._array = new_array
-
-        self._projected = True
-
-    def slice_generator(self):
-        for i in range(self.num_slices):
-            yield self._create_tensor(i)
-
-    def get_tensor(self, i=0):
-        return Tensor(self._create_tensor(i), extent=self.grid.extent, space=self.space)
-
-    def _create_tensor(self, i=None):
-
-        if self._projected:
-            return tf.convert_to_tensor(self._array[..., i][None, :, :], dtype=tf.float32)
-
-        return (tf.reduce_sum(self._array[:, :, i * self.slice_thickness_voxels:
-                                                i * self.slice_thickness_voxels + self.slice_thickness_voxels],
-                              axis=2) * self.voxel_height)[None, :, :]
-
-    def copy(self):
-        box = np.append(self.grid.extent, self.thickness)
-        return self.__class__(array=self._array.copy(), box=box, num_slices=self._num_slices, projected=self._projected)
-
-
-def potential_from_GPAW(calc):
-    from gpaw.utilities.ps2ae import PS2AE
-    potential_array = -PS2AE(calc).get_electrostatic_potential(ae=True)
-    return ArrayPotential(array=potential_array, box=np.diag(calc.atoms.cell))
+# class ArrayPotential(Showable):
+#
+#     def __init__(self, array, box, num_slices=None, projected=False):
+#
+#         self._array = np.float32(array - array.min())
+#
+#         if num_slices is None:
+#             num_slices = np.ceil(box[2] / .5).astype(np.int32)
+#
+#         if array.shape[2] % num_slices:
+#             raise RuntimeError()
+#
+#         extent = box[:2]
+#         gpts = GridProperty(lambda: np.array([dim for dim in self._array.shape[:2]]), dtype=np.int32, locked=True)
+#
+#         Showable.__init__(self, extent=extent, gpts=gpts, space='direct')
+#
+#         self._thickness = box[2]
+#         self._num_slices = num_slices
+#         self._projected = projected
+#
+#     def repeat(self, multiples):
+#         self._array = tf.tile(self._array, multiples)
+#         self.grid.extent = multiples[:2] * self.grid.extent
+#         self._thickness = multiples[2] * self._thickness
+#
+#     def set_view(self, origin, extent):
+#
+#         start = np.round(origin / self.grid.extent * self.grid.gpts).astype(np.int32)
+#         origin = start * self.grid.sampling
+#
+#         end = np.round((origin + extent) / self.grid.extent * self.grid.gpts).astype(np.int32)
+#         repeat = np.ceil(end / self.grid.gpts.astype(np.float)).astype(int)
+#
+#         new_array = np.tile(self._array, np.append(repeat, 1))
+#
+#         self._array = new_array[start[0]:end[0], start[1]:end[1], :]
+#
+#         self.grid.sampling = self.grid.sampling
+#
+#     @property
+#     def box(self):
+#         return np.concatenate((self.grid.extent, [self.thickness]))
+#
+#     @property
+#     def voxel_height(self):
+#         return self.thickness / self._array.shape[2]
+#
+#     @property
+#     def slice_thickness_voxels(self):
+#         return self._array.shape[2] // self.num_slices
+#
+#     @property
+#     def thickness(self):
+#         return self._thickness
+#
+#     @property
+#     def num_slices(self):
+#         return self._num_slices
+#
+#     @property
+#     def slice_thickness(self):
+#         return self.thickness / self.num_slices
+#
+#     def downsample(self):
+#         N, M = self.grid.gpts
+#
+#         X = np.fft.fft(self._array, axis=0)
+#         self._array = np.fft.ifft((X[:(N // 2), :] + X[-(N // 2):, :]) / 2., axis=0).real
+#
+#         X = np.fft.fft(self._array, axis=1)
+#         self._array = np.fft.ifft((X[:, :(M // 2)] + X[:, -(M // 2):]) / 2., axis=1).real
+#
+#         self.grid.extent = self.grid.extent
+#
+#     def project(self):
+#         if self._projected:
+#             raise RuntimeError()
+#
+#         new_array = np.zeros(tuple(np.append(self.grid.gpts, self.num_slices)), dtype=np.float32)
+#
+#         for i, tensor in enumerate(self.slice_generator()):
+#             new_array[..., i] = tensor
+#
+#         self._array = new_array
+#
+#         self._projected = True
+#
+#     def slice_generator(self):
+#         for i in range(self.num_slices):
+#             yield self._create_tensor(i)
+#
+#     def get_tensor(self, i=0):
+#         return Tensor(self._create_tensor(i), extent=self.grid.extent, space=self.space)
+#
+#     def _create_tensor(self, i=None):
+#
+#         if self._projected:
+#             return tf.convert_to_tensor(self._array[..., i][None, :, :], dtype=tf.float32)
+#
+#         return (tf.reduce_sum(self._array[:, :, i * self.slice_thickness_voxels:
+#                                                 i * self.slice_thickness_voxels + self.slice_thickness_voxels],
+#                               axis=2) * self.voxel_height)[None, :, :]
+#
+#     def copy(self):
+#         box = np.append(self.grid.extent, self.thickness)
+#         return self.__class__(array=self._array.copy(), box=box, num_slices=self._num_slices, projected=self._projected)
+#
+#
+# def potential_from_GPAW(calc):
+#     from gpaw.utilities.ps2ae import PS2AE
+#     potential_array = -PS2AE(calc).get_electrostatic_potential(ae=True)
+#     return ArrayPotential(array=potential_array, box=np.diag(calc.atoms.cell))

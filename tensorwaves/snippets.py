@@ -200,24 +200,26 @@ def polar2cartesian(polar):
         4 * tf.atan(1 / K) - 4 * polar['phi34'])
     return cartesian
 
-    def show_line(self, phi=0, k_max=1):
-        k = tf.linspace(0., k_max, 1024)
-        alpha = self.wavelength * k
 
-        chi = 2 * pi / self.wavelength * self.parametrization.get_function()(alpha, alpha ** 2, phi)
 
-        H = complex_exponential(-chi)
+def show_line(self, phi=0, k_max=1):
+    k = tf.linspace(0., k_max, 1024)
+    alpha = self.wavelength * k
 
-        if np.isfinite(self.aperture_radius):
-            aperture = Aperture(radius=self.aperture_radius, rolloff=self.aperture_rolloff)._function(alpha)
-            H *= tf.cast(aperture, tf.complex64)
-            show_line(k, aperture, mode='real', label='aperture')
+    chi = 2 * pi / self.wavelength * self.parametrization.get_function()(alpha, alpha ** 2, phi)
 
-        if self.focal_spread > 0.:
-            temporal = TemporalEnvelope(focal_spread=self.focal_spread)._function(alpha)
-            H *= tf.cast(temporal, tf.complex64)
-            show_line(k, temporal, mode='real', label='temporal')
+    H = complex_exponential(-chi)
 
-        show_line(k, H, mode='real', label='real')
-        show_line(k, H, mode='imaginary', label='imaginary')
-        plt.legend()
+    if np.isfinite(self.aperture_radius):
+        aperture = Aperture(radius=self.aperture_radius, rolloff=self.aperture_rolloff)._function(alpha)
+        H *= tf.cast(aperture, tf.complex64)
+        show_line(k, aperture, mode='real', label='aperture')
+
+    if self.focal_spread > 0.:
+        temporal = TemporalEnvelope(focal_spread=self.focal_spread)._function(alpha)
+        H *= tf.cast(temporal, tf.complex64)
+        show_line(k, temporal, mode='real', label='temporal')
+
+    show_line(k, H, mode='real', label='real')
+    show_line(k, H, mode='imaginary', label='imaginary')
+    plt.legend()

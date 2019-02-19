@@ -3,9 +3,10 @@ from math import pi
 import numpy as np
 import tensorflow as tf
 
-from tensorwaves.bases import FrequencyMultiplier, TensorWithEnergy, Tensor, notifying_property, base_property, \
+from tensorwaves.bases import FrequencyMultiplier, TensorWithEnergy, Tensor, notifying_property, named_property, \
     HasData, HasAccelerator
 from tensorwaves.utils import complex_exponential
+
 
 class Aperture(FrequencyMultiplier):
 
@@ -198,15 +199,15 @@ class PolarAberrations(object):
     C56 = notifying_property('_C56')
     phi56 = notifying_property('_phi56')
 
-    defocus = base_property('C10')
-    astig_mag = base_property('C12')
-    astig_angle = base_property('phi12')
-    coma = base_property('C21')
-    coma_angle = base_property('phi21')
-    astig_mag_2 = base_property('C23')
-    astig_angle_2 = base_property('phi23')
-    Cs = base_property('C30')
-    C5 = base_property('C50')
+    defocus = named_property('C10')
+    astig_mag = named_property('C12')
+    astig_angle = named_property('phi12')
+    coma = named_property('C21')
+    coma_angle = named_property('phi21')
+    astig_mag_2 = named_property('C23')
+    astig_angle_2 = named_property('phi23')
+    Cs = named_property('C30')
+    C5 = named_property('C50')
 
     def _calculate_data(self, alpha, alpha2, phi):
 
@@ -232,7 +233,7 @@ class PolarAberrations(object):
             tensor += (1 / 5. * alpha2 ** 2 * alpha *
                        (self.C41 * tf.cos((phi - self.phi41)) +
                         self.C43 * tf.cos(3. * (phi - self.phi43)) +
-                        self.C45 * tf.cos(5. * (phi - self.phi41))))
+                        self.C45 * tf.cos(5. * (phi - self.phi45))))
 
         if any([getattr(self, symbol) != 0. for symbol in ('C50', 'C52', 'phi52', 'C54', 'phi54', 'C56', 'phi56')]):
             tensor += (1 / 6. * alpha2 ** 3 *
@@ -301,8 +302,7 @@ class PrismAberration(HasData, HasAccelerator, PolarAberrations):
 
         tensor = PolarAberrations._calculate_data(self, alpha=alpha, alpha2=alpha2, phi=phi)
 
-        tensor = complex_exponential(
-            - 2 * np.pi / self.accelerator.wavelength * tensor)
+        tensor = complex_exponential(- 2 * np.pi / self.accelerator.wavelength * tensor)
 
         return tensor
 

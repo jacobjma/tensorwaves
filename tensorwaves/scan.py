@@ -75,7 +75,7 @@ class Scan(HasData):
         data = OrderedDict(zip(self.detectors, [[]] * len(self.detectors)))
 
         for i, positions in enumerate(self.generate_positions(max_batch)):
-
+            #print(positions)
             # for positions in tqdm(self.generate_positions(max_batch), total=num_iter):
             self._scanable.translate.positions = positions
             tensor = self._scanable.get_tensor()
@@ -143,6 +143,8 @@ class GridScan(Scan):
 
         Scan.__init__(self, scanable=scanable, detectors=detectors)
 
+        self._shape = num_positions
+
         def validate(value, dtype):
             if isinstance(value, np.ndarray):
                 if len(value) != 2:
@@ -182,7 +184,11 @@ class GridScan(Scan):
             self._end = self._end - np.abs(self._start - self._end) / np.array(self._num_positions)
 
     def read_detector(self, detector=None):
-        return Image(Scan.read_detector(self, detector)[None], extent=self._end - self._start)
+        #print(self.num_positions)
+        tensor = tf.reshape(Scan.read_detector(self, detector)[None], self._shape)[None]
+        #print(tensor.shape)
+
+        return Image(tensor, extent=self._end - self._start)
 
     def get_show_data(self):
         return self.read_detector()

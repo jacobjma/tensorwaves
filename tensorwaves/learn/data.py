@@ -1,103 +1,17 @@
 import os
 
 import numpy as np
+import scipy.ndimage
+import tensorflow as tf
 from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.spatial.distance import cdist
+from sklearn.model_selection import train_test_split
 
 from tensorwaves.bases import HasGrid, GridProperty
 from tensorwaves.potentials import Potential
-from tensorwaves.scan import GridScan
-from tensorflow import keras
-import scipy.ndimage
-from sklearn.model_selection import train_test_split
 
 
-def regression_image_generator(X, Y, seed=0):
-    # X = scipy.ndimage.zoom(X, (1, 2, 2, 1))
-    # Y = scipy.ndimage.zoom(Y, (1, 2, 2, 1))
-
-    def image_preproccesing_function(x):
-        x = 1 + 2 * np.random.rand() + (x - x.min()) / (x.max() - x.min()) * 4 * (.2 + np.random.rand())
-        x = np.random.poisson(x).astype(float)
-        x += .5 * np.random.rand() * np.random.normal(0, 1, x.shape)
-        x -= np.min(x)
-        x = x ** (1 + .2 * 2 * (np.random.rand() - .5))
-        x -= np.min(x)
-        x /= np.std(x)
-        #x *= 1 + .2 * 2 * (np.random.rand() - .5)
-        #x += np.random.rand() * x.max() * .05
-        return x
-
-    def preprocessing(x, fliplr=False, flipud=False, rotation=0., zoom=1., rolllr=0, rollud=0):
-
-        if fliplr:
-            x = np.fliplr(x)
-
-        if flipud:
-            x = np.fliplr(x)
-
-        if rotation > 0.:
-            x = scipy.ndimage.rotate(x, rotation, reshape=False)
-
-        if zoom != 1.:
-            x_new = scipy.ndimage.zoom(x, (zoom, zoom, 1))
-            x_new = x_new[:x.shape[0], :x.shape[1], :]
-
-            x = np.zeros_like(x)
-            x[:x_new.shape[0], :x_new.shape[1], :] = x_new
-
-        if rolllr > 0:
-            x = np.roll(x, rolllr, axis=0)
-
-        if rollud > 0:
-            x = np.roll(x, rollud, axis=0)
-
-        return x
-
-    datagen_x = keras.preprocessing.image.ImageDataGenerator()
-    datagen_y = keras.preprocessing.image.ImageDataGenerator()
-
-    train_generator_x = datagen_x.flow(X, batch_size=16, seed=seed)
-    train_generator_y = datagen_y.flow(Y, batch_size=16, seed=seed)
-
-    train_generator = zip(train_generator_x, train_generator_y)
-
-    for X_batch, Y_batch in train_generator:
-
-        for i in range(X_batch.shape[0]):
-
-            X_batch[i] -= X_batch[i].min()
-
-            if np.random.random() < 0.5:
-                fliplr = True
-            else:
-                fliplr = False
-
-            if np.random.random() < 0.5:
-                flipud = True
-            else:
-                flipud = False
-
-            if np.random.random() < 0.5:
-                rotation = np.random.uniform(0., 360)
-            else:
-                rotation = 0.
-
-            zoom = np.random.uniform(.8, 1.2)
-            # zoom = 1
-            rolllr = np.round(np.random.uniform(0, X_batch[i].shape[0])).astype(int)
-            rollud = np.round(np.random.uniform(0, X_batch[i].shape[1])).astype(int)
-
-            X_batch[i] = preprocessing(X_batch[i], fliplr=fliplr, flipud=flipud, rotation=rotation, zoom=zoom,
-                                       rolllr=rolllr, rollud=rollud)
-            Y_batch[i] = preprocessing(Y_batch[i], fliplr=fliplr, flipud=flipud, rotation=rotation, zoom=zoom,
-                                       rolllr=rolllr, rollud=rollud)
-
-            Y_batch[i, ..., -1] = 1 - np.sum(Y_batch[i, ..., :-1], axis=2)
-
-            X_batch[i] = image_preproccesing_function(X_batch[i])
-
-        yield X_batch, Y_batch
+# from tensorwaves.scan import GridScan
 
 
 def cluster_and_classify(atoms, distance=1., fingerprints=None):
@@ -118,14 +32,14 @@ def cluster_and_classify(atoms, distance=1., fingerprints=None):
     return cluster_labels, class_labels
 
 
-def create_gt(cluster_centers, gpts, extent, width, max_label=None):
-    sampling = extent / gpts
+def create_gt(cluster_centers, shape, extent, width, max_label=None):
+    sampling = extent / shape
 
     if max_label is None:
         max_label = len(cluster_centers)
 
-    x, y = np.mgrid[0:gpts[0], 0:gpts[1]]
-    gt = np.zeros(tuple(gpts) + (max_label + 1,))
+    x, y = np.mgrid[0:shape[0], 0:shape[1]]
+    gt = np.zeros(tuple(shape) + (max_label + 1,))
 
     for i, positions in enumerate(cluster_centers.values()):
         positions /= sampling
@@ -134,9 +48,9 @@ def create_gt(cluster_centers, gpts, extent, width, max_label=None):
             rounded_position = np.round(position).astype(int)
 
             x_lim_min = np.max((rounded_position[0] - width * 4, 0))
-            x_lim_max = np.min((rounded_position[0] + width * 4 + 1, gpts[0]))
+            x_lim_max = np.min((rounded_position[0] + width * 4 + 1, shape[0]))
             y_lim_min = np.max((rounded_position[1] - width * 4, 0))
-            y_lim_max = np.min((rounded_position[1] + width * 4 + 1, gpts[1]))
+            y_lim_max = np.min((rounded_position[1] + width * 4 + 1, shape[1]))
 
             x_window = x[x_lim_min: x_lim_max, y_lim_min: y_lim_max]
             y_window = y[x_lim_min: x_lim_max, y_lim_min: y_lim_max]
@@ -147,6 +61,41 @@ def create_gt(cluster_centers, gpts, extent, width, max_label=None):
     gt[:, :, -1] = 1 - np.sum(gt, axis=2)
 
     return gt
+
+
+class DataGenerator(tf.keras.utils.Sequence):
+    def __init__(self, training_set, batch_size=32, shuffle=True, augmentations=None):
+
+        self.training_set = training_set
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.augmentations = augmentations
+        self.on_epoch_end()
+
+    def __len__(self):
+        return int(np.floor(len(self.training_set) / self.batch_size))
+
+    def __getitem__(self, i):
+        # Generate indexes of the batch
+        batch_indices = self.indices[i * self.batch_size:(i + 1) * self.batch_size]
+
+        if i == len(self) - 1:
+            self.on_epoch_end()
+
+        batch_images = np.zeros((self.batch_size,) + self.training_set.image_shape)
+        batch_labels = np.zeros((self.batch_size,) + self.training_set.label_shape)
+
+        for j, batch_index in enumerate(batch_indices):
+            image, label = self.training_set[batch_index].as_tensors(self.augmentations)
+            batch_images[j] = image
+            batch_labels[j] = label
+
+        return batch_images, batch_labels
+
+    def on_epoch_end(self):
+        self.indices = np.arange(len(self.training_set))
+        if self.shuffle == True:
+            np.random.shuffle(self.indices)
 
 
 class TrainingSet(object):
@@ -164,6 +113,9 @@ class TrainingSet(object):
 
     def __getitem__(self, i):
         return self._examples[i]
+
+    def __len__(self):
+        return len(self._examples)
 
 
 class TrainingExample(object):
@@ -186,8 +138,15 @@ class TrainingSetSTEM(TrainingSet):
     def __init__(self, examples=None):
         TrainingSet.__init__(self, examples)
 
+    @property
+    def image_shape(self):
+        return tuple(self._examples[0].gpts) + (1,)
+
+    @property
+    def label_shape(self):
+        return tuple(self._examples[0].gpts) + (3,)
+
     def as_tensors(self):
-        size = tuple(self._examples[0].grid.gpts)
         num_classes = self._examples[0].num_classes + 1
 
         images = np.zeros((self.num_examples,) + size + (1,))
@@ -200,21 +159,21 @@ class TrainingSetSTEM(TrainingSet):
         return images, labels
 
     def get_generators(self):
-        X, Y = self.as_tensors()
-        X_train, X_valid, Y_train, Y_valid = train_test_split(X, Y, test_size=0.15, random_state=2018)
-
-        train_generator = regression_image_generator(X_train, Y_train)
-        valid_generator = regression_image_generator(X_valid, Y_valid)
+        # X, Y = self.as_tensors()
+        # X_train, X_valid, Y_train, Y_valid = train_test_split(X, Y, test_size=0.15, random_state=2018)
+        #
+        # train_generator = regression_image_generator(X_train, Y_train)
+        # valid_generator = regression_image_generator(X_valid, Y_valid)
 
         return train_generator, valid_generator
 
     @property
     def height(self):
-        return self._examples[0].grid.gpts[0]
+        return self._examples[0].gpts[0]
 
     @property
     def width(self):
-        return self._examples[0].grid.gpts[1]
+        return self._examples[0].gpts[1]
 
     def load(self, prefix):
         folder = prefix.split('/')[:-1]
@@ -255,12 +214,28 @@ class TrainingExampleSTEM(HasGrid):
     def num_classes(self):
         return np.max(self._class_labels) + 1
 
+    def as_tensors(self, augmentations=None):
+
+        image, label = self._image.copy(), self._truth.copy()
+
+        if augmentations:
+            for augmentation in augmentations:
+
+                try:
+                    image, label = augmentation.apply_image_and_label(image, label)
+                except AttributeError:
+                    pass
+
+                try:
+                    image = augmentation.apply_image(image)
+                except AttributeError:
+                    pass
+
+        return image, label
+
     def scale_image(self, num_positions):
-
-        self.grid.gpts = num_positions
-
-        # for i, image in enumerate(self._images):
-        self._image = scipy.ndimage.zoom(self._image, (1, 2, 2))
+        self.gpts = num_positions
+        self._image = scipy.ndimage.zoom(self._image, (2, 2, 1))
 
     def classify(self, distance=None, fingerprints=None):
 
@@ -287,7 +262,7 @@ class TrainingExampleSTEM(HasGrid):
                                             max_label=max_label)
 
     def create_image(self, prism, detector, tracker):
-        prism.grid.extent = self.grid.extent
+        prism.grid.extent = self.extent
 
         potential = Potential(self._atoms, sampling=prism.grid.sampling)
 
@@ -295,7 +270,7 @@ class TrainingExampleSTEM(HasGrid):
 
         S.multislice(potential, in_place=True, tracker=tracker)
 
-        scan = GridScan(scanable=S, detectors=detector, num_positions=self.grid.gpts)
+        scan = GridScan(scanable=S, detectors=detector, num_positions=self.gpts)
 
         scan.scan(tracker=tracker)
 
@@ -319,19 +294,19 @@ class TrainingExampleSTEM(HasGrid):
         if max_label is None:
             max_label = np.max(class_labels)
 
-        x, y = np.mgrid[0:self.grid.gpts[0], 0:self.grid.gpts[1]]
-        truth = np.zeros(tuple(self.grid.gpts) + (max_label + 2,))
+        x, y = np.mgrid[0:self.gpts[0], 0:self.gpts[1]]
+        truth = np.zeros(tuple(self.gpts) + (max_label + 2,))
 
         for cluster_label in cluster_labels:
             cluster_indices = np.where(cluster_label == cluster_labels)[0]
-            position = np.mean(self._atoms.get_positions()[cluster_indices, :2], axis=0) / self.grid.sampling
+            position = np.mean(self._atoms.get_positions()[cluster_indices, :2], axis=0) / self.sampling
 
             rounded_position = np.round(position).astype(int)
 
             x_lim_min = np.max((rounded_position[0] - gaussian_width * 4, 0))
-            x_lim_max = np.min((rounded_position[0] + gaussian_width * 4 + 1, self.grid.gpts[0]))
+            x_lim_max = np.min((rounded_position[0] + gaussian_width * 4 + 1, self.gpts[0]))
             y_lim_min = np.max((rounded_position[1] - gaussian_width * 4, 0))
-            y_lim_max = np.min((rounded_position[1] + gaussian_width * 4 + 1, self.grid.gpts[1]))
+            y_lim_max = np.min((rounded_position[1] + gaussian_width * 4 + 1, self.gpts[1]))
 
             x_window = x[x_lim_min: x_lim_max, y_lim_min: y_lim_max]
             y_window = y[x_lim_min: x_lim_max, y_lim_min: y_lim_max]
@@ -390,6 +365,6 @@ def load_training_example_stem(file):
     example._cluster_labels = loaded['cluster_labels']
     example._class_labels = loaded['class_labels']
     example._truth = loaded['truth']
-    example._image = loaded['image']
+    example._image = loaded['image'][0][..., None]
 
     return example

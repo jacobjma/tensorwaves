@@ -5,16 +5,30 @@ import matplotlib.gridspec as gridspec
 from ase.data import covalent_radii
 from ase.data.colors import cpk_colors
 
+from colorsys import hls_to_rgb
+
+
+def domain_coloring(z, fade_to_white=False, saturation=1, k=.5):
+    h = (np.angle(z) + np.pi) / (2 * np.pi) + 0.5
+    if fade_to_white:
+        l = k ** np.abs(z)
+    else:
+        l = 1 - k ** np.abs(z)
+    c = np.vectorize(hls_to_rgb)(h, l, saturation)
+    return np.array(c).T
+
 
 def convert_complex(array, mode='magnitude'):
     if mode.lower()[:3] == 'mag':
-        return np.abs(array) ** 2
+        return np.abs(array)
     elif mode.lower()[:3] == 'int':
         return np.abs(array) ** 2
     elif mode.lower()[:3] == 'rea':
         return np.real(array)
     elif mode.lower()[:3] == 'ima':
         return np.imag(array)
+    elif mode.lower()[:3] == 'pha':
+        return np.angle(array)
     else:
         raise RuntimeError()
 
@@ -90,7 +104,7 @@ def show_array(array, extent, space, display_space='direct', mode='magnitude', s
     for i in range(len(images)):
         ax = plt.subplot(gs[i // num_cols, (i % num_cols) + 1])
 
-        mapable = ax.imshow(images[i].T, extent=x_range + y_range, origin='lower', vmin=vmin, vmax=vmax)
+        mapable = ax.imshow(images[i].T, extent=x_range + y_range, origin='lower', vmin=vmin, vmax=vmax, **kwargs)
 
         # if i % num_cols:
         #    ax.set_yticks([])
