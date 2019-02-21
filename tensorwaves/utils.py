@@ -17,23 +17,7 @@ EPS = 1e-12
 
 
 
-def freq2angles(kx, ky, wavelength, return_squared_norm=False, return_azimuth=False):
-    alpha_x = kx * wavelength
-    alpha_y = ky * wavelength
 
-    if return_squared_norm & return_azimuth:
-        return (alpha_x, alpha_y, alpha_x[:, None] ** 2 + alpha_y[None, :] ** 2,
-                tf.atan2(alpha_x[:, None], alpha_y[None, :]))
-
-    elif return_squared_norm:
-        return alpha_x, alpha_y, alpha_x[:, None] ** 2 + alpha_y[None, :] ** 2
-
-    elif return_azimuth:
-
-        return alpha_x, alpha_y, tf.atan2(alpha_x[:, None], alpha_y[None, :])
-    else:
-
-        return alpha_x, alpha_y
 
 
 def batch_generator(n_items, max_batch_size):
@@ -74,22 +58,12 @@ def cell_is_rectangular(cell, tol=1e-12):
 
 
 
-def fftfreq2d(gpts, sampling):
-    value = []
-    for n, h in zip(gpts, sampling):
-        value += [fftfreq(n, h)]
-    return value
-
-
 def fft_shift(tensor, axes):
     shift = [tensor.shape[axis].value // 2 for axis in axes]
     return tf.manip.roll(tensor, shift, axes)
 
 
-def wrapped_slice(tensor, begin, size):
-    shift = [-x for x in begin]
-    tensor = tf.manip.roll(tensor, shift, list(range(len(begin))))
-    return tf.slice(tensor, [0] * len(begin), size)
+
 
 
 class ProgressTracker(object):

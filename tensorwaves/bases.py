@@ -69,7 +69,7 @@ class TensorFactory(Observer):
         if message['change']:
             self.up_to_date = False
 
-    def _calculate_tensor(self):
+    def _calculate_tensor(self, *args):
         raise NotImplementedError()
 
     def get_tensor(self):
@@ -320,20 +320,32 @@ class Grid(Observable):
             raise RuntimeError('grid is not defined')
 
     def match(self, other):
-        if (self.extent is None) & (not self._extent.locked):
+        if self.extent is None:
             self.extent = other.extent
-        elif not other._extent.locked:
+
+        elif other.extent is None:
             other.extent = self.extent
 
-        if (self.gpts is None) & (not self._gpts.locked):
+        elif np.any(self.extent != other.extent):
+            raise RuntimeError('inconsistent grids')
+
+        if self.gpts is None:
             self.gpts = other.gpts
-        elif not other._gpts.locked:
+
+        elif other.gpts is None:
             other.gpts = self.gpts
 
-        if (self.sampling is None) & (not self._sampling.locked):
+        elif np.any(self.gpts != other.gpts):
+            raise RuntimeError('inconsistent grids')
+
+        if self.sampling is None:
             self.sampling = other.sampling
-        elif not other._sampling.locked:
+
+        elif other.sampling is None:
             other.sampling = self.sampling
+
+        elif np.any(self.sampling != other.sampling):
+            raise RuntimeError('inconsistent grids')
 
     def copy(self):
         return self.__class__(extent=self._extent.copy(), gpts=self._gpts.copy(), sampling=self._sampling.copy())
@@ -434,10 +446,12 @@ class EnergyProperty(Observable):
 
     @property
     def wavelength(self):
+        self.check_is_defined()
         return energy2wavelength(self.energy)
 
     @property
-    def interaction_parameter(self):
+    def sigma(self):
+        self.check_is_defined()
         return energy2sigma(self.energy)
 
     def check_is_defined(self):
@@ -445,10 +459,14 @@ class EnergyProperty(Observable):
             raise RuntimeError('energy is not defined')
 
     def match(self, other):
-        if self.energy is None:
-            self.energy = other.energy
-        elif other.energy is None:
+        if other.energy is None:
             other.energy = self.energy
+
+        elif self.energy is None:
+            self.energy = other.energy
+
+        elif self.energy != other.energy:
+            raise RuntimeError('inconsistent energies')
 
     def copy(self):
         return self.__class__(self.energy)
@@ -473,7 +491,7 @@ class HasEnergy(object):
 class Tensor(HasGrid):
 
     def __init__(self, tensor, extent=None, sampling=None, space='direct'):
-        self._tensor = tensor
+        self._tensorflow = tensor
 
         gpts = GridProperty(lambda: self.gpts, dtype=np.int32, locked=True)
 
@@ -483,19 +501,19 @@ class Tensor(HasGrid):
 
     @property
     def gpts(self):
-        return np.array([dim.value for dim in self._tensor.shape[1:]])
+        return np.array([dim.value for dim in self._tensorflow.shape[1:]])
 
     def check_is_defined(self):
         self._grid.check_is_defined()
 
     def tensorflow(self):
-        return self._tensor
+        return self._tensorflow
 
     def numpy(self):
-        return self._tensor.numpy()
+        return self._tensorflow.numpy()
 
     def copy(self):
-        new_tensor = self.__class__(tensor=tf.identity(self._tensor), extent=self.extent.copy(), space=self.space)
+        new_tensor = self.__class__(tensor=tf.identity(self._tensorflow), extent=self.extent.copy(), space=self.space)
         new_tensor._grid = self._grid.copy()
         return new_tensor
 
@@ -512,6 +530,11 @@ class TensorWithEnergy(Tensor, HasEnergy):
     def check_is_defined(self):
         self._grid.check_is_defined()
         self._energy.check_is_defined()
+
+
+def complex_exponential(x):
+    return tf.complex(tf.cos(x), tf.sin(x))
+
 
 # class Showable(HasGrid):
 #
@@ -560,41 +583,3 @@ class TensorWithEnergy(Tensor, HasEnergy):
 #
 #
 #
-# class FrequencyMultiplier(HasData, Showable, HasAccelerator):
-#
-#     def __init__(self, extent=None, gpts=None, sampling=None, energy=None, save_data=True, grid=None, accelerator=None):
-#
-#         HasData.__init__(self, save_data=save_data)
-#         Showable.__init__(self, extent=extent, gpts=gpts, sampling=sampling, grid=grid, space='fourier')
-#         HasAccelerator.__init__(self, energy=energy, accelerator=accelerator)
-#
-#         self.grid.register_observer(self)
-#         self.accelerator.register_observer(self)
-#
-#         self._observing = [self.grid, self.accelerator]
-#
-#         self.register_observer(self)
-#
-#     def get_semiangles(self, return_squared_norm=False, return_azimuth=False):
-#         kx, ky = self._grid.fftfreq()
-#
-#         return freq2angles(kx=kx, ky=ky, wavelength=self._accelerator.wavelength,
-#                            return_squared_norm=return_squared_norm, return_azimuth=return_azimuth)
-#
-#     def apply(self, wave, in_place=False):
-#         wave.grid.match(self.grid)
-#         wave.accelerator.match(self.accelerator)
-#
-#         wave = wave.get_tensor()
-#
-#         tensor = tf.ifft2d(tf.fft2d(wave._tensor) * self.get_data()._tensor)
-#
-#         if in_place:
-#             wave._tensor = tensor
-#         else:
-#             wave = TensorWaves(tensor, extent=self.grid.extent.copy(), energy=self.accelerator.energy)
-#
-#         return wave
-#
-#     def get_showable_tensor(self):
-#         return self.get_data()

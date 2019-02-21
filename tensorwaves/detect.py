@@ -1,121 +1,62 @@
 import numpy as np
 import tensorflow as tf
 
-from tensorwaves.bases import Tensor, Showable, ShowableWithEnergy, HasData, notifying_property
-from tensorwaves.utils import freq2angles
+from tensorwaves.bases import TensorFactory, HasGrid, HasEnergy, notifying_property
+from tensorwaves.transfer import squared_norm
+from tensorwaves.image import Image
 
 
-class Image(Tensor):
+class Detector(HasGrid):
 
-    def __init__(self, tensor, extent=None, sampling=None, grid=None, space='direct'):
-        Tensor.__init__(self, tensor, extent=extent, sampling=sampling, grid=grid, space=space)
-
-    # def get_normalization_factor(self):
-    #     return tf.reduce_sum(self._tensor) * tf.reduce_prod(self.grid.sampling) * tf.cast(
-    #         tf.reduce_prod(self.grid.gpts), tf.float32)
-    #
-    # def normalize(self, dose):
-    #     self._tensor = self._tensor * dose / self.get_normalization_factor()
-
-    def scale_intensity(self, scale):
-        self._tensor = self._tensor * scale
-
-    def apply_poisson_noise(self):
-        self._tensor = tf.random.poisson(self._tensor, shape=[1])[0]
-
-    def normalize(self):
-        mean, stddev = tf.nn.moments(self._tensor, axes=[0, 1, 2])
-        self._tensor = (self._tensor - mean) / tf.sqrt(stddev)
-
-    def add_gaussian_noise(self, stddev=1.):
-        self._tensor = self._tensor + tf.random.normal(self._tensor.shape, stddev=stddev)
-
-    def clip(self, min=0., max=np.inf):
-        self._tensor = tf.clip_by_value(self._tensor, clip_value_min=min, clip_value_max=max)
-
-    def save(self, path):
-        np.savez(file=path, tensor=self._tensor.numpy(), extent=self.grid.extent, space=self.space)
-
-    def show(self, i=None, space='direct', scale='linear', **kwargs):
-        Showable.show(self, i=i, space=space, mode='real', scale=scale, **kwargs)
-
-
-class Detector(HasData, ShowableWithEnergy):
-
-    def __init__(self, extent=None, gpts=None, sampling=None, energy=None, space='direct', save_data=True, grid=None,
-                 accelerator=None):
-        HasData.__init__(self, save_data=save_data)
-        ShowableWithEnergy.__init__(self, extent=extent, gpts=gpts, sampling=sampling, grid=grid, space=space,
-                                    energy=energy, accelerator=accelerator)
-
-        self.grid.register_observer(self)
-        self.accelerator.register_observer(self)
-        self.register_observer(self)
-
-    # def get_intensity(self, tensor):
-    #     return tf.abs(wave.get_tensor()._tensor) ** 2
+    def __init__(self, extent=None, gpts=None, sampling=None):
+        HasGrid.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
 
     def detect(self, wave):
         raise NotImplementedError()
 
-    def get_semiangles(self, return_squared_norm=False, return_azimuth=False):
+
+class DetectorWithEnergy(Detector, HasEnergy):
+
+    def __init__(self, extent=None, gpts=None, sampling=None, energy=None):
+        Detector.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
+        HasEnergy.__init__(self, energy=energy)
+
+    def semiangles(self):
         kx, ky = self._grid.fftfreq()
+        wavelength = self.wavelength
+        return kx * wavelength, ky * wavelength
 
-        return freq2angles(kx=kx, ky=ky, wavelength=self._accelerator.wavelength,
-                           return_squared_norm=return_squared_norm, return_azimuth=return_azimuth)
+    def match(self, other):
+        try:
+            self._grid.match(other._grid)
+        except AttributeError:
+            pass
 
-
-class FullFieldDetector(Detector):
-    def __init__(self, extent=None, gpts=None, sampling=None, energy=None, save_data=True, grid=None, accelerator=None):
-        Detector.__init__(self, extent=extent, gpts=gpts, sampling=sampling, energy=energy, space='direct',
-                          save_data=save_data, grid=grid, accelerator=accelerator)
-
-    def detect(self, wave):
-        intensity = tf.abs(wave.get_tensor().tensorflow()) ** 2
-
-        return Image(intensity, extent=wave.grid.extent)
-
-
-class PtychographyDetector(Detector):
-
-    def __init__(self, extent=None, gpts=None, sampling=None, energy=None, save_data=True, grid=None, accelerator=None):
-
-        Detector.__init__(self, extent=extent, gpts=gpts, sampling=sampling, energy=energy, space='direct',
-                          save_data=save_data, grid=grid, accelerator=accelerator)
-
-    def detect(self, wave):
-        intensity = tf.abs(tf.fft2d(wave.get_tensor().tensorflow())) ** 2
-
-        return Image(intensity, extent=wave.grid.extent)
+        try:
+            self._energy.match(other._energy)
+        except AttributeError:
+            pass
 
 
-class WaveDetector(Detector):
-    def __init__(self, extent=None, gpts=None, sampling=None, energy=None, save_data=True, grid=None, accelerator=None):
-        Detector.__init__(self, extent=extent, gpts=gpts, sampling=sampling, energy=energy, space='direct',
-                          save_data=save_data, grid=grid, accelerator=accelerator)
+class RingDetector(DetectorWithEnergy, TensorFactory):
 
-    def detect(self, wave):
-        return wave
-
-
-class RingDetector(Detector):
-
-    def __init__(self, inner=None, outer=None, rolloff=0., integrate=True, extent=None, gpts=None, sampling=None,
-                 energy=None, save_data=True, grid=None, accelerator=None):
+    def __init__(self, inner, outer, rolloff=0., integrate=True, extent=None, gpts=None, sampling=None,
+                 energy=None, save_tensor=True):
         self._inner = inner
         self._outer = outer
         self._rolloff = rolloff
         self._integrate = integrate
 
-        Detector.__init__(self, extent=extent, gpts=gpts, sampling=sampling, energy=energy, space='fourier',
-                          save_data=save_data, grid=grid, accelerator=accelerator)
+        DetectorWithEnergy.__init__(self, extent=extent, gpts=gpts, sampling=sampling, energy=energy)
+        TensorFactory.__init__(self, save_tensor=save_tensor)
 
     inner = notifying_property('_inner')
     outer = notifying_property('_outer')
     rolloff = notifying_property('_rolloff')
 
-    def _calculate_data(self):
-        _, _, alpha2 = self.get_semiangles(return_squared_norm=True)
+    def _calculate_tensor(self):
+
+        alpha2 = squared_norm(*self.semiangles())
         alpha = tf.sqrt(alpha2)
 
         if self.rolloff > 0.:
@@ -134,21 +75,11 @@ class RingDetector(Detector):
         return tensor
 
     def detect(self, wave):
-        wave.grid.match(self.grid)
-        wave.accelerator.match(self.accelerator)
+        self.match(wave)
 
         intensity = tf.abs(tf.fft2d(wave.get_tensor().tensorflow())) ** 2
 
         if self._integrate:
-            return tf.reduce_sum(intensity * self.get_data(), axis=(1, 2)) / tf.reduce_sum(intensity, axis=(1, 2))
+            return tf.reduce_sum(intensity * self.get_tensor(), axis=(1, 2)) / tf.reduce_sum(intensity, axis=(1, 2))
         else:
             return Image(intensity, extent=wave.grid.extent)
-
-    def get_showable_tensor(self, i=None):
-        return self.get_data()[None]
-
-    def show(self, i=None, space='fourier', scale='linear', **kwargs):
-        Showable.show(self, i=i, space=space, mode='real', scale=scale, **kwargs)
-
-    def _create_tensor(self):
-        pass

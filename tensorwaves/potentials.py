@@ -84,7 +84,7 @@ class PotentialParameterization(object):
         raise RuntimeError()
 
     def _find_cutoff(self, atomic_number):
-        return np.float32(brentq(lambda x: self.get_function(atomic_number)(x) - self.tolerance, 1e-16, 100))
+        return np.float32(brentq(lambda x: self.get_function(atomic_number)(x) - self.tolerance, 1e-7, 1000))
 
     def get_cutoff(self, atomic_number):
         try:
@@ -294,6 +294,10 @@ class Potential(TensorFactory, HasGrid):
         if isinstance(parametrization, str):
             if parametrization == 'lobato':
                 parametrization = LobatoPotential(tolerance=tolerance)
+
+            elif parametrization == 'kirkland':
+                parametrization = KirklandPotential(tolerance=tolerance)
+
             else:
                 raise RuntimeError()
 
@@ -432,6 +436,7 @@ class Potential(TensorFactory, HasGrid):
 
     def slice_generator(self):
         for i in range(self.num_slices):
+            self.current_slice = i
             yield self._calculate_tensor()
 
     def get_tensor(self):

@@ -138,43 +138,7 @@ class SymmetricCTF(ParameterizedCTF):
         return c
 
 
-class CartesianCTF(ParameterizedCTF):
 
-    def __init__(self):
-        self.symbols = ('C10', 'C12a', 'C12b',
-                        'C21a', 'C21b', 'C23a', 'C23b',
-                        'C30', 'C32a', 'C32b', 'C34a', 'C34b')
-
-        self.aliases = ('defocus', 'astig_x', 'astig_y',
-                        'coma_x', 'coma_y', 'astig_x_2', 'astig_y_2',
-                        'Cs', None, None, None, None)
-
-        ParameterizedCTF.__init__(self, self.symbols, self.aliases)
-
-    def get_function(self):
-        chi = None
-        # todo: implement 4th and 5th order
-        if any([getattr(self, symbol) != 0. for symbol in ('C10', 'C12a', 'C12b')]):
-            chi = lambda ax, ay, ax2, ay2, a2: (1 / 2. * (self.C10 * a2 +
-                                                          self.C12a * (ax2 - ay2)) + self.C12b * ax * ay)
-        if any([getattr(self, symbol) != 0. for symbol in ('C21a', 'C21b', 'C23a', 'C23b')]):
-            chi_old1 = chi
-            chi = (lambda ax, ay, ax2, ay2, a2: chi_old1(ax, ay, ax2, ay2, a2) +
-                                                1 / 3. * (a2 * (self.C21a * ax + self.C21b * ay) +
-                                                          self.C23a * ax * (ax2 - 3 * ay2) +
-                                                          self.C23b * ay * (ay2 - 3 * ax2)))
-        if any([getattr(self, symbol) != 0. for symbol in ('C30', 'C32a', 'C32b', 'C34a', 'C34b')]):
-            chi_old2 = chi
-            chi = (lambda ax, ay, ax2, ay2, a2: chi_old2(ax, ay, ax2, ay2, a2) +
-                                                1 / 4. * (self.C30 * a2 ** 2 +
-                                                          self.C32a * (ax2 ** 2 - ay2 ** 2) +
-                                                          2 * self.C32b * ax * ay * a2 +
-                                                          self.C34a * (ax2 ** 2 - 6 * ax2 * ay2 + ay2 ** 2) +
-                                                          4 * self.C34b * (ax * ay2 * ay - ax2 * ax * ay)))
-        if chi is None:
-            return lambda ax, ay, ax2, ay2, a2: tf.ones(ax.shape)
-        else:
-            return chi
 
     def copy(self):
         c = self.__class__()
