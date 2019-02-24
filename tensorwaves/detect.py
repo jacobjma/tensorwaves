@@ -14,6 +14,12 @@ class Detector(HasGrid):
     def detect(self, wave):
         raise NotImplementedError()
 
+    def match(self, other):
+        try:
+            self._grid.match(other._grid)
+        except AttributeError:
+            pass
+
 
 class DetectorWithEnergy(Detector, HasEnergy):
 

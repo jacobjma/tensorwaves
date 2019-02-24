@@ -6,14 +6,7 @@ import tensorflow as tf
 from tensorwaves.bases import TensorWithEnergy, Tensor, notifying_property, named_property, Observable, \
     HasGrid, HasEnergy, TensorFactory, Grid, EnergyProperty
 from tensorwaves.bases import complex_exponential
-
-
-def squared_norm(x, y):
-    return x[:, None] ** 2 + y[None, :] ** 2
-
-
-def angle(x, y):
-    return tf.atan2(x[:, None], y[None, :])
+from tensorwaves.ops import squared_norm, angle
 
 
 class FrequencyTransfer(HasGrid, HasEnergy, TensorFactory, Observable):
@@ -66,8 +59,6 @@ class Aperture(FrequencyTransfer):
             alpha = tf.sqrt(squared_norm(*self.semiangles()))
 
         if self.rolloff > 0.:
-            alpha = tf.sqrt(alpha)
-
             tensor = .5 * (1 + tf.cos(np.pi * (alpha - self.radius) / self.rolloff))
             tensor *= tf.cast(alpha < (self.radius + self.rolloff), tf.float32)
             tensor = tf.where(alpha > self.radius, tensor, tf.ones(alpha.shape))
@@ -209,6 +200,14 @@ class PolarAberrations(Observable):
     coma_angle = named_property('phi21')
     Cs = named_property('C30')
     C5 = named_property('C50')
+
+    def set_parameters(self, parameters):
+
+        for name, value in parameters.items():
+            if hasattr(self, name):
+                setattr(self, name, value)
+            else:
+                raise RuntimeError()
 
     def __call__(self, alpha, alpha2, phi):
 
@@ -502,6 +501,8 @@ class CTF(FrequencyTransfer):
         self._aberrations.register_observer(self)
         self._aperture.register_observer(self)
         self._temporal_envelope.register_observer(self)
+        self._energy.register_observer(self)
+        self._grid.register_observer(self)
 
     @property
     def aberrations(self):

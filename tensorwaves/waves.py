@@ -1,3 +1,5 @@
+from collections import OrderedDict
+
 import numpy as np
 import tensorflow as tf
 from ase import Atoms
@@ -6,8 +8,8 @@ from tensorwaves.bases import HasGrid, HasEnergy, TensorFactory, TensorWithEnerg
     EnergyProperty, complex_exponential
 from tensorwaves.potentials import Potential
 from tensorwaves.prism import PrismAperture, PrismAberration, PrismTranslate
-from tensorwaves.transfer import CTF, Translate
 from tensorwaves.scan import LineScan, GridScan
+from tensorwaves.transfer import CTF, Translate
 
 
 def fourier_propagator(k, dz, wavelength):
@@ -99,6 +101,11 @@ class TensorWaves(TensorWithEnergy):
         from tensorwaves.image import Image
         return Image(tf.abs(self._tensorflow) ** 2, extent=self.extent.copy())
 
+    def semiangles(self):
+        kx, ky = self._grid.fftfreq()
+        wavelength = self.wavelength
+        return kx * wavelength, ky * wavelength
+
     def copy(self):
         return self.__class__(tensor=tf.identity(self._tensorflow), extent=self.extent.copy(), energy=self.energy)
 
@@ -183,21 +190,16 @@ class ProbeWaves(WaveFactory):
 
         self._ctf = CTF(aperture_radius=aperture_radius, aperture_rolloff=aperture_rolloff, extent=extent, gpts=gpts,
                         sampling=sampling, energy=energy, **kwargs)
-
         self.ctf._grid = self._grid
         self.ctf._energy = self._energy
-
         self.aberrations._grid = self._grid
         self.aberrations._energy = self._energy
-
         self.aperture._grid = self._grid
         self.aperture._energy = self._energy
-
         self.temporal_envelope._grid = self._grid
         self.temporal_envelope._energy = self._energy
 
         self._translate = Translate(positions=positions)
-
         self.translate._grid = self._grid
         self.translate._energy = self._energy
 
@@ -206,6 +208,8 @@ class ProbeWaves(WaveFactory):
         self.ctf.aperture.register_observer(self)
         self.ctf.temporal_envelope.register_observer(self)
         self.translate.register_observer(self)
+        self._grid.register_observer(self)
+        self._energy.register_observer(self)
 
     @property
     def ctf(self):
@@ -245,7 +249,6 @@ class ProbeWaves(WaveFactory):
 
     def gridscan(self, start=None, end=None, num_positions=None, sampling=None, endpoint=True, max_batch=1,
                  potential=None, detectors=None):
-
         scan = GridScan(scanable=self, detectors=detectors, start=start, end=end, num_positions=num_positions,
                         sampling=sampling, endpoint=endpoint)
 
@@ -262,7 +265,8 @@ class ProbeWaves(WaveFactory):
 
 class PrismWaves(WaveFactory):
 
-    def __init__(self, cutoff, interpolation=1., gpts=None, extent=None, sampling=None, energy=None, save_tensor=True):
+    def __init__(self, cutoff=0.01, interpolation=1., gpts=None, extent=None, sampling=None, energy=None,
+                 save_tensor=True):
         self.cutoff = cutoff
         self.interpolation = interpolation
 
@@ -323,15 +327,12 @@ class ScatteringMatrix(TensorFactory, TensorWaves):
         self._energy = EnergyProperty(energy=energy)
 
         self._aberrations = PrismAberration(kx=kx, ky=ky, **kwargs)
-
         self.aberrations._energy = self._energy
 
-        self._translate = PrismTranslate(kx=kx, ky=ky, positions=position)
-
+        self._translate = PrismTranslate(kx=kx, ky=ky, position=position)
         self._translate._energy = self._energy
 
         self._aperture = PrismAperture(kx=kx, ky=ky, radius=np.inf)
-
         self._aperture._energy = self._energy
 
         self._translate.register_observer(self)
@@ -346,6 +347,14 @@ class ScatteringMatrix(TensorFactory, TensorWaves):
     @property
     def ky(self):
         return self._ky
+
+    @property
+    def alpha_x(self):
+        return self._kx * self.wavelength
+
+    @property
+    def alpha_y(self):
+        return self._ky * self.wavelength
 
     @property
     def interpolation(self):
@@ -369,11 +378,11 @@ class ScatteringMatrix(TensorFactory, TensorWaves):
 
     @property
     def position(self):
-        return self._translate.positions[0]
+        return self._translate.position
 
     @position.setter
     def position(self, value):
-        self._translate.positions = value
+        self._translate.position = value
 
     @property
     def k_max(self):
@@ -382,20 +391,40 @@ class ScatteringMatrix(TensorFactory, TensorWaves):
     def get_probe(self):
         return self.get_tensor()
 
+    def scan(self, scan, detectors=None, tracker=None):
+
+        if detectors:
+            scan._data = OrderedDict(zip(detectors, [[]] * len(detectors)))
+
+        else:
+            scan._data = []
+
+        for i, position in enumerate(scan.generate_positions(1)):
+            self.position = position[0]
+
+            tensor = self.get_tensor()
+
+            if detectors:
+                for detector, detections in scan._data.items():
+                    detections.append(detector.detect(tensor))
+
+            else:
+                scan._data.append(tensor)
+
+        return scan
+
     def linescan(self, start, end, num_positions=None, sampling=None, endpoint=True, detectors=None):
         scan = LineScan(scanable=self, detectors=detectors, start=start, end=end, num_positions=num_positions,
                         sampling=sampling, endpoint=endpoint)
-        scan.scan(max_batch=1)
-        return scan
+
+        return self.scan(scan=scan, detectors=detectors)
 
     def gridscan(self, start=None, end=None, num_positions=None, sampling=None, endpoint=True, detectors=None):
 
         scan = GridScan(scanable=self, detectors=detectors, start=start, end=end, num_positions=num_positions,
                         sampling=sampling, endpoint=endpoint)
 
-        scan.scan(max_batch=1)
-
-        return scan
+        return self.scan(scan=scan, detectors=detectors)
 
     def get_coefficients(self):
         coefficients = self.aberrations.get_tensor()

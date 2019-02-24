@@ -3,6 +3,9 @@ import numpy as np
 import tensorflow as tf
 
 from ..bases import linspace_no_endpoint, fftfreq, GridProperty, Grid, HasGrid
+from ..transfer import FrequencyTransfer, Aperture, TemporalEnvelope, PhaseAberration, CTF
+from ..waves import WaveFactory, PlaneWaves, ProbeWaves, PrismWaves
+from .test_utils import CallCounter
 
 tf.enable_eager_execution()
 
@@ -50,18 +53,22 @@ def test_grid_property():
     assert np.all(grid_property.value == np.array([2, 2], dtype=np.float32))
 
 
-def test_grid():
-    grid = Grid(extent=5, sampling=.2)
+@pytest.mark.parametrize('has_grid',
+                         [Grid,
+                          FrequencyTransfer, Aperture, TemporalEnvelope, PhaseAberration, CTF,
+                          WaveFactory, PlaneWaves, ProbeWaves, PrismWaves])
+def test_grid(has_grid):
+    grid = has_grid(extent=5, sampling=.2)
 
     assert np.all(grid.extent == np.array([5, 5], dtype=np.float32))
     assert np.all(grid.gpts == np.array([25, 25], dtype=np.int32))
     assert np.all(grid.sampling == np.array([.2, .2], dtype=np.float32))
 
-    grid = Grid(sampling=.2, gpts=10)
+    grid = has_grid(sampling=.2, gpts=10)
 
     assert np.all(grid.extent == np.array([2, 2], dtype=np.float32))
 
-    grid = Grid(extent=(8, 6), gpts=10)
+    grid = has_grid(extent=(8, 6), gpts=10)
     assert np.all(grid.sampling == np.array([0.8, 0.6], dtype=np.float32))
 
     grid.sampling = .2
@@ -86,7 +93,7 @@ def test_grid():
     assert np.all(grid.sampling == grid.extent / np.float32(grid.gpts))
 
     gpts = GridProperty(value=lambda: np.array([20, 20], dtype=np.int32), dtype=np.int32, locked=True)
-    grid = Grid(gpts=gpts)
+    grid = has_grid(gpts=gpts)
 
     grid.sampling = .1
 
@@ -99,24 +106,35 @@ def test_grid():
     with pytest.raises(RuntimeError):
         grid.gpts = 10
 
-    grid = Grid()
+    grid = has_grid()
 
     with pytest.raises(RuntimeError):
         grid.check_is_defined()
 
 
-def test_has_grid():
-    class Dummy(HasGrid):
-        def __init__(self, extent=None, gpts=None, sampling=None, grid=None):
-            HasGrid.__init__(self, extent=extent, gpts=gpts, sampling=sampling, grid=grid)
+@pytest.mark.parametrize('tensorfactory_with_grid',
+                         [FrequencyTransfer, Aperture, TemporalEnvelope, PhaseAberration, CTF,
+                          WaveFactory, PlaneWaves, ProbeWaves, PrismWaves])
+def test_grid_update(tensorfactory_with_grid):
+    instance = tensorfactory_with_grid(extent=10)
 
-    grid = Grid(extent=5, gpts=10)
+    counter = CallCounter(lambda: instance.extent)
+    instance._calculate_tensor = counter.func_caller
 
-    dummy = Dummy(grid=grid)
+    assert instance.up_to_date == False
+    assert np.all(instance.get_tensor() == np.array([10, 10], dtype=np.float32))
+    assert instance.up_to_date == True
+    assert counter.n == 1
+    instance.get_tensor()
+    assert counter.n == 1
 
-    assert np.all(dummy.extent == np.array([5, 5], dtype=np.float32))
-    assert np.all(dummy.gpts == np.array([10, 10], dtype=np.int32))
+    instance.extent = 5
+    assert instance.up_to_date == False
+    assert np.all(instance.get_tensor() == np.array([5, 5], dtype=np.float32))
+    assert instance.up_to_date == True
+    assert counter.n == 2
 
-    dummy = Dummy(extent=5, gpts=10)
-
-    assert np.all(dummy.sampling == np.array([.5, .5], dtype=np.float32))
+    instance.extent = 5
+    assert instance.up_to_date == True
+    instance.get_tensor()
+    assert counter.n == 2

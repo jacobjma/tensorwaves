@@ -79,7 +79,6 @@ class PrismAberration(PrismCoefficients):
         alpha2 = alpha_x ** 2 + alpha_y ** 2
         alpha = tf.sqrt(alpha2)
         phi = tf.atan2(alpha_x, alpha_y)
-        #ssss
         tensor = self.parameters(alpha=alpha, alpha2=alpha2, phi=phi)
 
         return complex_exponential(- 2 * np.pi / self.wavelength * tensor)
@@ -87,39 +86,39 @@ class PrismAberration(PrismCoefficients):
 
 class PrismTranslate(PrismCoefficients):
 
-    def __init__(self, kx, ky, positions=None, energy=None, save_tensor=True):
+    def __init__(self, kx, ky, position=None, energy=None, save_tensor=True):
 
         PrismCoefficients.__init__(self, kx=kx, ky=ky, energy=energy, save_tensor=save_tensor)
 
-        if positions is None:
-            positions = (0., 0.)
+        if position is None:
+            position = (0., 0.)
 
-        self._positions = self._validate_positions(positions)
+        self._position = self._validate_position(position)
 
     @property
-    def positions(self):
-        return self._positions
+    def position(self):
+        return self._position
 
-    @positions.setter
-    def positions(self, positions):
-        old = self.positions
-        self._positions = self._validate_positions(positions)
-        change = np.any(self._positions != old)
-        self.notify_observers({'name': '_positions', 'old': old, 'new': positions, 'change': change})
+    @position.setter
+    def position(self, position):
+        old = self.position
+        self._position = self._validate_position(position)
+        change = np.any(self._position != old)
+        self.notify_observers({'name': '_position', 'old': old, 'new': position, 'change': change})
 
-    def _validate_positions(self, positions):
-        if isinstance(positions, (np.ndarray, list, tuple)):
-            positions = np.array(positions, dtype=np.float32)
-            if positions.shape == (2,):
-                positions = positions[None, :]
+    def _validate_position(self, position):
+        if isinstance(position, (np.ndarray, list, tuple)):
+            position = np.array(position, dtype=np.float32)
+            if position.shape != (2,):
+                raise RuntimeError()
+
+            return position
 
         else:
             raise RuntimeError('')
 
-        return positions
-
     def _calculate_tensor(self):
 
-        tensor = complex_exponential(-2 * np.pi * (self.kx * self.positions[:, 0] + self.ky * self.positions[:, 1]))
+        tensor = complex_exponential(-2 * np.pi * (self.kx * self.position[0] + self.ky * self.position[1]))
 
         return tf.cast(tensor, tf.complex64)

@@ -178,7 +178,6 @@ class GridScan(Scan):
         return np.prod(self._num_positions)
 
     def get_positions(self):
-        print(self._end)
         x = np.linspace(self._start[0], self._end[0], self._num_positions[0])
         y = np.linspace(self._start[1], self._end[1], self._num_positions[1])
         y, x = np.meshgrid(y, x)
