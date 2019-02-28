@@ -10,6 +10,7 @@ from tensorwaves.potentials import Potential
 from tensorwaves.prism import PrismAperture, PrismAberration, PrismTranslate
 from tensorwaves.scan import LineScan, GridScan
 from tensorwaves.transfer import CTF, Translate
+from tensorwaves.utils import ProgressBar
 
 
 def fourier_propagator(k, dz, wavelength):
@@ -51,13 +52,13 @@ class TensorWaves(TensorWithEnergy):
         else:
             wave = self.copy()
 
-        # progress_bar = ProgressBar(num_iter=potential.num_slices, description='Multislice')
+        progress_bar = ProgressBar(num_iter=potential.num_slices, description='Multislice')
         #
         # if progress_tracker is not None:
         #     progress_tracker.add_bar(progress_bar)
 
         for i, potential_slice in enumerate(potential.slice_generator()):
-            # progress_bar.update(i)
+            progress_bar.update(i)
 
             wave._tensorflow = wave._tensorflow * complex_exponential(wave.sigma * potential_slice)
             wave.propagate(potential.slice_thickness)
@@ -247,7 +248,7 @@ class ProbeWaves(WaveFactory):
         scan.scan(max_batch=max_batch, potential=potential)
         return scan
 
-    def gridscan(self, start=None, end=None, num_positions=None, sampling=None, endpoint=True, max_batch=1,
+    def gridscan(self, start=None, end=None, num_positions=None, sampling=None, endpoint=False, max_batch=1,
                  potential=None, detectors=None):
         scan = GridScan(scanable=self, detectors=detectors, start=start, end=end, num_positions=num_positions,
                         sampling=sampling, endpoint=endpoint)
@@ -337,7 +338,7 @@ class ScatteringMatrix(TensorFactory, TensorWaves):
 
         self._translate.register_observer(self)
         self._aberrations.register_observer(self)
-        self._aberrations._parameters.register_observer(self)
+        self._aberrations._parametrization.register_observer(self)
         self._aperture.register_observer(self)
 
     @property
@@ -419,7 +420,7 @@ class ScatteringMatrix(TensorFactory, TensorWaves):
 
         return self.scan(scan=scan, detectors=detectors)
 
-    def gridscan(self, start=None, end=None, num_positions=None, sampling=None, endpoint=True, detectors=None):
+    def gridscan(self, start=None, end=None, num_positions=None, sampling=None, endpoint=False, detectors=None):
 
         scan = GridScan(scanable=self, detectors=detectors, start=start, end=end, num_positions=num_positions,
                         sampling=sampling, endpoint=endpoint)

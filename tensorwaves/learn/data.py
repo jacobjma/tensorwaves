@@ -25,6 +25,7 @@ def cluster_and_classify(atoms, distance=1., fingerprints=None):
         cluster = np.where(cluster_labels == cluster_label)[0]
         for j, fingerprint in enumerate(fingerprints):
             if len(cluster) == len(fingerprint):
+
                 if np.all(fingerprint == atoms.get_atomic_numbers()[cluster]):
                     class_labels[cluster] = j
                     break

@@ -22,12 +22,12 @@ def test_prism_probe():
 def test_prism_probe_aberrations():
     probe = ProbeWaves(extent=8, gpts=512, energy=100e3, aperture_radius=0.01)
     probe.positions = (4, 4)
-    probe.aberrations.parameters.defocus = 100
+    probe.aberrations.parametrization.defocus = 100
     probe_image = np.abs(probe.get_tensor().numpy()) ** 2
 
     prism = PrismWaves(extent=8, gpts=512, energy=100e3, cutoff=0.01)
     S = prism.get_tensor()
-    S.aberrations.parameters.defocus = 100
+    S.aberrations.parametrization.defocus = 100
     S.position = (4, 4)
 
     prism_probe_image = np.abs(S.get_tensor().numpy()) ** 2

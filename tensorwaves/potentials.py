@@ -84,7 +84,8 @@ class PotentialParameterization(object):
         raise RuntimeError()
 
     def _find_cutoff(self, atomic_number):
-        return np.float32(brentq(lambda x: self.get_function(atomic_number)(x) - self.tolerance, 1e-7, 1000))
+        #print(self.get_function(atomic_number))
+        return np.float32(brentq(lambda x: (self.get_function(atomic_number)(x)) - self.tolerance, 1e-7, 1000))
 
     def get_cutoff(self, atomic_number):
         try:
@@ -513,25 +514,12 @@ class Potential(TensorFactory, HasGrid):
         box = self.box
         origin = np.array([0., 0., 0.])
 
-        if margin:
-            atoms = self
-        else:
-            atoms = self.atoms
-
         positions = []
         atomic_numbers = []
-        if i is None:
-            for atomic_number in np.unique(self.atoms.get_atomic_numbers()):
-                positions.append(atoms.get_positions(atomic_number))
-                atomic_numbers.append([atomic_number] * len(atoms.get_positions(atomic_number)))
 
-        else:
-            box[2] = self.slice_thickness
-            origin[2] = self.slice_entrance
-
-            for atomic_number in np.unique(self.atoms.get_atomic_numbers()):
-                positions.append(self.get_positions_in_slice(atomic_number))
-                atomic_numbers.append([atomic_number] * len(self.get_positions_in_slice(atomic_number)))
+        for atomic_number in self._species:
+            positions.append(self.get_positions(atomic_number))
+            atomic_numbers.append([atomic_number] * len(self.get_positions(atomic_number)))
 
         display_atoms(np.vstack(positions), np.hstack(atomic_numbers).astype(np.int), plane=plane, origin=origin,
                       box=box, scale=scale, fig_scale=fig_scale)

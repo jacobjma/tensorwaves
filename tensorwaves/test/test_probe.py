@@ -8,8 +8,8 @@ tf.enable_eager_execution()
 def test_probe():
     uncorrected = ProbeWaves(extent=16, gpts=512, energy=100e3, aperture_radius=0.0103)
     uncorrected.positions = (8, 8)
-    uncorrected.aberrations.parameters.defocus = 674
-    uncorrected.aberrations.parameters.Cs = -1.3e7
+    uncorrected.aberrations.parametrization.defocus = 674
+    uncorrected.aberrations.parametrization.Cs = -1.3e7
 
     corrected = ProbeWaves(extent=16, gpts=512, energy=100e3, aperture_radius=0.025)
     corrected.positions = (8, 8)

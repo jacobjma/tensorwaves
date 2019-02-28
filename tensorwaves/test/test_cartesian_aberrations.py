@@ -1,25 +1,32 @@
 import numpy as np
 import tensorflow as tf
-
+import pytest
 from tensorwaves.transfer import PhaseAberration, polar2cartesian, cartesian2polar
 
 tf.enable_eager_execution()
 
 
-def test_cartesian_aberrations():
-    polar = {'C10': -0.32946933106950427,
-             'C12': 0.21952131413482778,
-             'phi12': 0.7959807283776827,
-             'C21': 96.33956134736414,
-             'phi21': -2.901658413073904,
-             'C23': 18.872887355721325,
-             'phi23': 3.052515052950999,
-             'C30': -689.6580852868879,
-             'C32': 474.95542338446086,
-             'phi32': -1.3681637906849324,
-             'C34': 359.19550595819817,
-             'phi34': 2.301293052118716}
+@pytest.fixture
+def polar():
+    polar = {}
+    polar['C10'] = np.random.uniform(-1, 1)
+    polar['C12'] = np.random.uniform(-1, 1)
+    polar['phi12'] = np.random.uniform(-np.pi, np.pi)
 
+    polar['C21'] = np.random.uniform(-1, 1) * 1e2
+    polar['phi21'] = np.random.uniform(-np.pi, np.pi)
+    polar['C23'] = np.random.uniform(-1, 1) * 1e2
+    polar['phi23'] = np.random.uniform(-np.pi, np.pi)
+
+    polar['C30'] = np.random.uniform(-1, 1) * 1e3
+    polar['C32'] = np.random.uniform(-1, 1) * 1e3
+    polar['phi32'] = np.random.uniform(-np.pi, np.pi)
+    polar['C34'] = np.random.uniform(-1, 1) * 1e3
+    polar['phi34'] = np.random.uniform(-np.pi, np.pi)
+    return polar
+
+
+def test_cartesian_aberrations(polar):
     cartesian = polar2cartesian(polar)
 
     cartesian_aberrations = PhaseAberration(extent=(10, 5), gpts=56, energy=80e3, parametrization='cartesian',
@@ -31,20 +38,7 @@ def test_cartesian_aberrations():
                          polar_aberrations.get_tensor().numpy()[0]) < 5e-4)
 
 
-def test_conversion():
-    polar = {'C10': -0.32946933106950427,
-             'C12': 0.21952131413482778,
-             'phi12': 0.7959807283776827,
-             'C21': 96.33956134736414,
-             'phi21': -2.901658413073904,
-             'C23': 18.872887355721325,
-             'phi23': 3.052515052950999,
-             'C30': -689.6580852868879,
-             'C32': 474.95542338446086,
-             'phi32': -1.3681637906849324,
-             'C34': 359.19550595819817,
-             'phi34': 2.301293052118716}
-
+def test_conversion(polar):
     cartesian1 = polar2cartesian(polar)
     cartesian2 = polar2cartesian(cartesian2polar(cartesian1))
 

@@ -100,117 +100,114 @@ class TemporalEnvelope(FrequencyTransfer):
                                 energy=self.energy)
 
 
-class PolarAberrations(Observable):
+class Parametrization(Observable):
 
-    def __init__(self,
-                 C10=0., C12=0., phi12=0.,
-                 C21=0., phi21=0., C23=0., phi23=0.,
-                 C30=0., C32=0., phi32=0., C34=0., phi34=0.,
-                 C41=0., phi41=0., C43=0., phi43=0., C45=0., phi45=0.,
-                 C50=0., C52=0., phi52=0., C54=0., phi54=0., C56=0., phi56=0.,
-                 defocus=None, astig_mag=None, astig_angle=None, coma=None, coma_angle=None, Cs=None, C5=None):
-
+    def __init__(self, symbols, aliases, parameters):
         Observable.__init__(self)
 
-        if defocus is not None:
-            self._C10 = defocus
-        else:
-            self._C10 = C10
-        if astig_mag is not None:
-            self._C12 = astig_mag
-        else:
-            self._C12 = C12
-        if astig_angle is not None:
-            self._phi12 = astig_angle
-        else:
-            self._phi12 = phi12
+        self._aliases = aliases
+        self._parameters = dict(zip(symbols, [0.] * len(symbols)))
+        self.set_parameters(parameters)
 
-        if coma is not None:
-            self._C21 = coma
-        else:
-            self._C21 = C21
-        if coma_angle is not None:
-            self._phi21 = coma_angle
-        else:
-            self._phi21 = phi21
-        self._C23 = C23
-        self._phi23 = phi23
-
-        if Cs is not None:
-            self._C30 = Cs
-        else:
-            self._C30 = C30
-        self._C32 = C32
-        self._phi32 = phi32
-        self._C34 = C34
-        self._phi34 = phi34
-
-        self._C41 = C41
-        self._phi41 = phi41
-        self._C43 = C43
-        self._phi43 = phi43
-        self._C45 = C45
-        self._phi45 = phi45
-
-        if C5 is not None:
-            self._C50 = C5
-        else:
-            self._C50 = C50
-        self._C52 = C52
-        self._phi52 = phi52
-        self._C54 = C54
-        self._phi54 = phi54
-        self._C56 = C56
-        self._phi56 = phi56
-
-    C10 = notifying_property('_C10')
-    C12 = notifying_property('_C12')
-    phi12 = notifying_property('_phi12')
-
-    C21 = notifying_property('_C21')
-    phi21 = notifying_property('_phi21')
-    C23 = notifying_property('_C23')
-    phi23 = notifying_property('_phi23')
-
-    C30 = notifying_property('_C30')
-    C32 = notifying_property('_C32')
-    phi32 = notifying_property('_phi32')
-    C34 = notifying_property('_C34')
-    phi34 = notifying_property('_phi34')
-
-    C41 = notifying_property('_C41')
-    phi41 = notifying_property('_phi41')
-    C43 = notifying_property('_C43')
-    phi43 = notifying_property('_phi43')
-    C45 = notifying_property('_C45')
-    phi45 = notifying_property('_phi45')
-
-    C50 = notifying_property('_C50')
-    C52 = notifying_property('_C52')
-    phi52 = notifying_property('_phi52')
-    C54 = notifying_property('_C54')
-    phi54 = notifying_property('_phi54')
-    C56 = notifying_property('_C56')
-    phi56 = notifying_property('_phi56')
-
-    defocus = named_property('C10')
-    astig_mag = named_property('C12')
-    astig_angle = named_property('phi12')
-    coma = named_property('C21')
-    coma_angle = named_property('phi21')
-    Cs = named_property('C30')
-    C5 = named_property('C50')
+    @property
+    def parameters(self):
+        return self._parameters
 
     def set_parameters(self, parameters):
+        for symbol, value in parameters.items():
+            if symbol in self._parameters.keys():
+                self._parameters[symbol] = np.float32(value)
 
-        for name, value in parameters.items():
-            if hasattr(self, name):
-                setattr(self, name, value)
+            elif symbol in self._aliases.keys():
+                self._parameters[self._aliases[symbol]] = np.float32(value)
+
             else:
-                raise RuntimeError()
+                raise RuntimeError('{}'.format(symbol))
+
+
+def parametrization_property(key):
+    def getter(self):
+        return self._parameters[key]
+
+    def setter(self, value):
+        old = getattr(self, key)
+        self._parameters[key] = value
+        change = old != value
+        self.notify_observers({'name': key, 'old': old, 'new': value, 'change': change})
+
+    return property(getter, setter)
+
+
+class PolarAberrations(Parametrization):
+
+    def __init__(self, parameters=None, **kwargs):
+
+        if parameters is None:
+            parameters = {}
+
+        parameters.update(kwargs)
+
+        symbols = ('C10', 'C12', 'phi12',
+                   'C21', 'phi21', 'C23', 'phi23',
+                   'C30', 'C32', 'phi32', 'C34', 'phi34',
+                   'C41', 'phi41', 'C43', 'phi43', 'C45', 'phi45',
+                   'C50', 'C52', 'phi52', 'C54', 'phi54', 'C56', 'phi56')
+
+        aliases = {'defocus': 'C10', 'astigmatism': 'C12', 'astigmatism_angle': 'phi12',
+                   'coma': 'C21', 'coma_angle': 'phi21',
+                   'Cs': 'C30',
+                   'C5': 'C50'}
+
+        Parametrization.__init__(self, symbols, aliases, parameters)
+
+    C10 = parametrization_property('C10')
+    C12 = parametrization_property('C12')
+    phi12 = parametrization_property('phi12')
+
+    C21 = parametrization_property('C21')
+    phi21 = parametrization_property('phi21')
+    C23 = parametrization_property('C23')
+    phi23 = parametrization_property('phi23')
+
+    C30 = parametrization_property('C30')
+    C32 = parametrization_property('C32')
+    phi32 = parametrization_property('phi32')
+    C34 = parametrization_property('C34')
+    phi34 = parametrization_property('phi34')
+
+    C41 = parametrization_property('C41')
+    phi41 = parametrization_property('phi41')
+    C43 = parametrization_property('C43')
+    phi43 = parametrization_property('phi43')
+    C45 = parametrization_property('C45')
+    phi45 = parametrization_property('phi45')
+
+    C50 = parametrization_property('C50')
+    C52 = parametrization_property('C52')
+    phi52 = parametrization_property('phi52')
+    C54 = parametrization_property('C54')
+    phi54 = parametrization_property('phi54')
+    C56 = parametrization_property('C56')
+    phi56 = parametrization_property('phi56')
+
+    defocus = parametrization_property('C10')
+    astigmatism = parametrization_property('C12')
+    astigmatism_angle = parametrization_property('phi12')
+    coma = parametrization_property('C21')
+    coma_angle = parametrization_property('phi21')
+    Cs = parametrization_property('C30')
+    C5 = parametrization_property('C50')
+
+    def to_zernike(self, aperture_radius):
+        parameters = polar2zernike(self.parameters, aperture_radius)
+
+        max_order = 0
+        for key in parameters.keys():
+            max_order = max(max_order, key[0])
+
+        return ZernikeAberrations(aperture_radius=aperture_radius, parameters=parameters, max_order=max_order)
 
     def __call__(self, alpha, alpha2, phi):
-
         tensor = tf.zeros(alpha.shape)
 
         if any([getattr(self, symbol) != 0. for symbol in ('C10', 'C12', 'phi12')]):
@@ -245,70 +242,46 @@ class PolarAberrations(Observable):
         return tensor
 
 
-class CartesianAberrations(Observable):
+class CartesianAberrations(Parametrization):
 
-    def __init__(self,
-                 C10=0., C12a=0., C12b=0.,
-                 C21a=0., C21b=0., C23a=0., C23b=0.,
-                 C30=0., C32a=0., C32b=0., C34a=0., C34b=0.,
-                 defocus=None, astig_x=None, astig_y=None, coma_x=None, coma_y=None, Cs=None):
-        Observable.__init__(self)
+    def __init__(self, parameters=None, **kwargs):
 
-        if defocus is not None:
-            self._C10 = defocus
-        else:
-            self._C10 = C10
-        if astig_x is not None:
-            self._C12a = astig_x
-        else:
-            self._C12a = C12a
-        if astig_y is not None:
-            self._C12b = astig_y
-        else:
-            self._C12b = C12b
+        if parameters is None:
+            parameters = {}
 
-        if coma_x is not None:
-            self._C21a = coma_x
-        else:
-            self._C21a = C21a
-        if coma_y is not None:
-            self._C21b = coma_y
-        else:
-            self._C21b = C21b
-        self._C23a = C23a
-        self._C23b = C23b
+        parameters.update(kwargs)
 
-        if Cs is not None:
-            self._C30 = Cs
-        else:
-            self._C30 = C30
-        self._C32a = C32a
-        self._C32b = C32b
-        self._C34a = C34a
-        self._C34b = C34b
+        symbols = ('C10', 'C12a', 'C12b',
+                   'C21a', 'C21b', 'C23a', 'C23b',
+                   'C30', 'C32a', 'C32b', 'C34a', 'C34b')
 
-    C10 = notifying_property('_C10')
-    C12a = notifying_property('_C12a')
-    C12b = notifying_property('_C12b')
+        aliases = {'defocus': 'C10', 'astigmatism_x': 'C12a', 'astigmatism_y': 'C12b',
+                   'coma': 'C21', 'coma_angle': 'phi21',
+                   'C30': 'Cs',
+                   'C50': 'C5'}
 
-    C21a = notifying_property('_C21a')
-    C21b = notifying_property('_C21b')
-    C23a = notifying_property('_C23a')
-    C23b = notifying_property('_C23b')
+        Parametrization.__init__(self, symbols, aliases, kwargs)
 
-    C30 = notifying_property('_C30')
-    C32a = notifying_property('_C32a')
-    C32b = notifying_property('_C32b')
-    C34a = notifying_property('_C34a')
-    C34b = notifying_property('_C34b')
+    C10 = parametrization_property('C10')
+    C12a = parametrization_property('C12a')
+    C12b = parametrization_property('C12b')
 
-    defocus = named_property('C10')
-    astig_x = named_property('C12a')
-    astig_y = named_property('C12b')
-    coma_x = named_property('C21a')
-    coma_y = named_property('C21b')
-    Cs = named_property('C30')
-    C5 = named_property('C50')
+    C21a = parametrization_property('C21a')
+    C21b = parametrization_property('C21b')
+    C23a = parametrization_property('C23a')
+    C23b = parametrization_property('C23b')
+
+    C30 = parametrization_property('C30')
+    C32a = parametrization_property('C32a')
+    C32b = parametrization_property('C32b')
+    C34a = parametrization_property('C34a')
+    C34b = parametrization_property('C34b')
+
+    defocus = parametrization_property('C10')
+    astigmatism_x = parametrization_property('C12a')
+    astigmatism_y = parametrization_property('C12b')
+    coma_x = parametrization_property('C21a')
+    coma_y = parametrization_property('C21b')
 
     def __call__(self, ax, ay, ax2, ay2, a2):
         tensor = tf.zeros(ax.shape)
@@ -351,7 +324,7 @@ def polar2cartesian(polar):
     cartesian['C34b'] = 1 / 4. * (1 + K ** 2) ** 2 / (K ** 3 - K) * polar['C34'] * np.cos(
         4 * np.arctan(1 / K) - 4 * polar['phi34'])
 
-    return {key: value for key, value in cartesian.items() if value != 0.}
+    return cartesian  # {key: value for key, value in cartesian.items() if value != 0.}
 
 
 def cartesian2polar(cartesian):
@@ -359,20 +332,238 @@ def cartesian2polar(cartesian):
 
     polar = {}
     polar['C10'] = cartesian['C10']
-    polar['C12'] = - cartesian['C12a'] * np.sqrt(1 + (cartesian['C12b'] / cartesian['C12a']) ** 2)
-    polar['phi12'] = - np.arctan(cartesian['C12b'] / cartesian['C12a']) / 2.
-    polar['C21'] = cartesian['C21b'] * np.sqrt(1 + (cartesian['C21a'] / cartesian['C21b']) ** 2)
-    polar['phi21'] = np.arctan(cartesian['C21a'] / cartesian['C21b'])
-    polar['C23'] = cartesian['C23b'] * np.sqrt(1 + (cartesian['C23a'] / cartesian['C23b']) ** 2)
-    polar['phi23'] = -np.arctan(cartesian['C23a'] / cartesian['C23b']) / 3.
+    polar['C12'] = - np.sqrt(cartesian['C12a'] ** 2 + cartesian['C12b'] ** 2)
+    polar['phi12'] = - np.arctan2(cartesian['C12b'], cartesian['C12a']) / 2.
+    polar['C21'] = np.sqrt(cartesian['C21a'] ** 2 + cartesian['C21b'] ** 2)
+    polar['phi21'] = np.arctan2(cartesian['C21a'], cartesian['C21b'])
+    polar['C23'] = np.sqrt(cartesian['C23a'] ** 2 + cartesian['C23b'] ** 2)
+    polar['phi23'] = -np.arctan2(cartesian['C23a'], cartesian['C23b']) / 3.
     polar['C30'] = cartesian['C30']
-    polar['C32'] = -cartesian['C32a'] * np.sqrt(1 + (cartesian['C32b'] / cartesian['C32a']) ** 2)
-    polar['phi32'] = -np.arctan(cartesian['C32b'] / cartesian['C32a']) / 2.
-    K = np.sqrt(3 + np.sqrt(8.))
-    A = 1 / 4. * (1 + K ** 2) ** 2 / (K ** 3 - K)
-    B = 4 * np.arctan(1 / K)
-    polar['phi34'] = np.arctan(1 / (A * np.sin(B)) * cartesian['C34b'] / cartesian['C34a'] - 1 / np.tan(B)) / 4
-    polar['C34'] = cartesian['C34a'] / np.cos(-4 * polar['phi34'])
+    polar['C32'] = -np.sqrt(cartesian['C32a'] ** 2 + cartesian['C32b'] ** 2)
+    polar['phi32'] = -np.arctan2(cartesian['C32b'], cartesian['C32a']) / 2.
+    polar['C34'] = np.sqrt(cartesian['C34a'] ** 2 + cartesian['C34b'] ** 2)
+    polar['phi34'] = np.arctan2(cartesian['C34b'], cartesian['C34a']) / 4
+
+    return polar  # {key: value for key, value in polar.items() if value != 0.}
+
+
+def zernike_polynomial(rho, phi, n, m):
+    assert n >= m
+    assert (n + m) % 2 == 0
+
+    if m >= 0:
+        even = True
+    else:
+        even = False
+
+    def factorial(n):
+        return np.prod(range(1, n + 1)).astype(int)
+
+    def normalization(n, m, k):
+        return (-1) ** k * factorial(n - k) // (
+                factorial(k) * factorial((n + m) // 2 - k) * factorial((n - m) // 2 - k))
+
+    m = abs(m)
+
+    R = np.zeros_like(rho)
+    for k in range(0, (n - m) // 2 + 1):
+        if (n - 2 * k) > 1:
+            R += normalization(n, m, k) * rho ** (n - 2 * k)
+
+    if even:
+        Z = R * np.cos(m * phi)
+    else:
+        Z = R * np.sin(m * phi)
+
+    return Z
+
+
+class ZernikeExpansion(object):
+
+    def __init__(self, coefficients, basis, indices):
+        self._coefficients = coefficients
+        self._basis = basis
+        self._indices = indices
+
+    def to_parametrization(self):
+        pass
+
+    def sum(self):
+        return tf.reduce_sum(self._basis * self._coefficients[:, None], axis=0)
+
+
+class ZernikeAberrations(Parametrization):
+
+    def __init__(self, aperture_radius, max_order=6, parameters=None):
+
+        self._aperture_radius = aperture_radius
+
+        if parameters is None:
+            parameters = {}
+
+        aliases = {}
+        symbols = []
+
+        symmetric = False
+
+        for n in range(1, max_order + 1):
+            for m in range(-n, n + 1):
+                if (not symmetric) | (m == 0):
+                    if (n - m) % 2 == 0:
+                        symbols.append((n, m))
+
+        Parametrization.__init__(self, symbols, aliases, parameters)
+
+    @property
+    def aperture_radius(self):
+        return self._aperture_radius
+
+    def expansion(self, k, phi):
+        k /= self._aperture_radius
+
+        indices = []
+        expansion = []
+        coefficients = []
+        for (n, m), value in self.parameters.items():
+            indices.append((n, m))
+            expansion.append(zernike_polynomial(k, phi, n, m))
+            coefficients.append(value)
+
+        # print()
+        # sss
+        expansion = tf.convert_to_tensor(expansion)
+        coefficients = tf.convert_to_tensor(coefficients)
+
+        return indices, expansion, coefficients
+
+    def to_polar(self):
+        parameters = zernike2polar(self.parameters, self.aperture_radius)
+        return PolarAberrations(parameters=parameters)
+
+    def __call__(self, k, phi):
+        k /= self._aperture_radius
+
+        Z = tf.zeros(k.shape)
+        for (n, m), value in self.parameters.items():
+            Z += value * zernike_polynomial(k, phi, n, m)
+        return Z
+
+
+def polar_aberration_order(symbol):
+    for letter in list(symbol):
+        try:
+            return int(letter)
+        except:
+            pass
+
+
+def polar2zernike(polar, aperture_radius):
+    polar = defaultdict(lambda: 0, polar)
+
+    for symbol, value in polar.items():
+        if symbol[0] == 'C':
+            polar[symbol] *= aperture_radius ** (polar_aberration_order(symbol) + 1)
+
+    zernike = {}
+    zernike[(1, 1)] = 2 * polar['C21'] / 9. * np.cos(polar['phi21']) + polar['C41'] / 10. * np.cos(polar['phi41'])
+    zernike[(1, -1)] = 2 * polar['C21'] / 9. * np.sin(polar['phi21']) + polar['C41'] / 10. * np.sin(polar['phi41'])
+
+    zernike[(2, 0)] = polar['C10'] / 4. + polar['C30'] / 8. + 3 / 40. * polar['C50']
+    zernike[(2, 2)] = polar['C12'] / 2. * np.cos(2 * polar['phi12']) + \
+                      3 * polar['C32'] / 16. * np.cos(2 * polar['phi32']) + \
+                      (1 / 6. - 1 / 15.) * polar['C52'] * np.cos(2 * polar['phi52'])
+    zernike[(2, -2)] = polar['C12'] / 2. * np.sin(2 * polar['phi12']) + \
+                       3 * polar['C32'] / 16. * np.sin(2 * polar['phi32']) + \
+                       (1 / 6. - 1 / 15.) * polar['C52'] * np.sin(2 * polar['phi52'])
+
+    zernike[(3, 1)] = polar['C21'] / 9. * np.cos(polar['phi21']) + 4 * polar['C41'] / 50. * np.cos(polar['phi41'])
+    zernike[(3, -1)] = polar['C21'] / 9. * np.sin(polar['phi21']) + 4 * polar['C41'] / 50. * np.sin(polar['phi41'])
+    zernike[(3, 3)] = polar['C23'] / 3. * np.cos(3 * polar['phi23']) + 4 * polar['C43'] / 25. * np.cos(
+        3 * polar['phi43'])
+    zernike[(3, -3)] = polar['C23'] / 3. * np.sin(3 * polar['phi23']) + 4 * polar['C43'] / 25. * np.sin(
+        3 * polar['phi43'])
+
+    zernike[(4, 0)] = polar['C30'] / 24. + polar['C50'] / 24.
+    zernike[(4, 2)] = polar['C32'] / 16. * np.cos(2 * polar['phi32']) + polar['C52'] / 18. * np.cos(2 * polar['phi52'])
+    zernike[(4, -2)] = polar['C32'] / 16. * np.sin(2 * polar['phi32']) + polar['C52'] / 18. * np.sin(2 * polar['phi52'])
+    zernike[(4, 4)] = polar['C34'] / 4. * np.cos(4 * polar['phi34']) + 5 * polar['C54'] / 36. * np.cos(
+        4 * polar['phi54'])
+    zernike[(4, -4)] = polar['C34'] / 4. * np.sin(4 * polar['phi34']) + 5 * polar['C54'] / 36. * np.sin(
+        4 * polar['phi54'])
+
+    zernike[(5, 1)] = polar['C41'] / 50. * np.cos(polar['phi41'])
+    zernike[(5, -1)] = polar['C41'] / 50. * np.sin(polar['phi41'])
+    zernike[(5, 3)] = polar['C43'] / 25. * np.cos(3 * polar['phi43'])
+    zernike[(5, -3)] = polar['C43'] / 25. * np.sin(3 * polar['phi43'])
+    zernike[(5, 5)] = polar['C45'] / 5. * np.cos(5 * polar['phi45'])
+    zernike[(5, -5)] = polar['C45'] / 5. * np.sin(5 * polar['phi45'])
+
+    zernike[(6, 0)] = polar['C50'] / 120.
+    zernike[(6, 2)] = polar['C52'] / 90. * np.cos(2 * polar['phi52'])
+    zernike[(6, -2)] = polar['C52'] / 90. * np.sin(2 * polar['phi52'])
+    zernike[(6, 4)] = polar['C54'] / 36. * np.cos(4 * polar['phi54'])
+    zernike[(6, -4)] = polar['C54'] / 36. * np.sin(4 * polar['phi54'])
+    zernike[(6, 6)] = polar['C56'] / 6. * np.cos(6 * polar['phi56'])
+    zernike[(6, -6)] = polar['C56'] / 6. * np.sin(6 * polar['phi56'])
+
+    return {key: value for key, value in zernike.items() if value != 0.}
+
+
+def zernike2polar(zernike, aperture_radius):
+    zernike = defaultdict(lambda: 0., zernike)
+
+    polar = {}
+    polar['C50'] = 120 * zernike[(6, 0)]
+    polar['C52'] = np.sqrt(zernike[(6, -2)] ** 2 + zernike[(6, 2)] ** 2) * 90
+    polar['phi52'] = np.arctan2(zernike[(6, -2)], zernike[(6, 2)]) / 2.
+    polar['C54'] = np.sqrt(zernike[(6, -4)] ** 2 + zernike[(6, 4)] ** 2) * 36
+    polar['phi54'] = np.arctan2(zernike[(6, -4)], zernike[(6, 4)]) / 4.
+    polar['C56'] = np.sqrt(zernike[(6, -6)] ** 2 + zernike[(6, 6)] ** 2) * 6
+    polar['phi56'] = np.arctan2(zernike[(6, -6)], zernike[(6, 6)]) / 6.
+
+    polar['C41'] = np.sqrt(zernike[(5, -1)] ** 2 + zernike[(5, 1)] ** 2) * 50
+    polar['phi41'] = np.arctan2(zernike[(5, -1)], zernike[(5, 1)])
+    polar['C43'] = np.sqrt(zernike[(5, -3)] ** 2 + zernike[(5, 3)] ** 2) * 25
+    polar['phi43'] = np.arctan2(zernike[(5, -3)], zernike[(5, 3)]) / 3.
+    polar['C45'] = np.sqrt(zernike[(5, -5)] ** 2 + zernike[(5, 5)] ** 2) * 5
+    polar['phi45'] = np.arctan2(zernike[(5, -5)], zernike[(5, 5)]) / 5.
+
+    polar['C30'] = 24 * zernike[(4, 0)] - polar['C50']
+    polar['C32'] = np.sqrt((zernike[(4, -2)] - polar['C52'] / 18. * np.sin(2 * polar['phi52'])) ** 2 +
+                           (zernike[(4, 2)] - polar['C52'] / 18. * np.cos(2 * polar['phi52'])) ** 2) * 16
+    polar['phi32'] = np.arctan2(zernike[(4, -2)] - polar['C52'] / 18. * np.sin(2 * polar['phi52']),
+                                zernike[(4, 2)] - polar['C52'] / 18. * np.cos(2 * polar['phi52'])) / 2.
+    polar['C34'] = np.sqrt((zernike[(4, -4)] - 5 * polar['C54'] / 36. * np.sin(4 * polar['phi54'])) ** 2 +
+                           (zernike[(4, 4)] - 5 * polar['C54'] / 36. * np.cos(4 * polar['phi54'])) ** 2) * 4
+    polar['phi34'] = np.arctan2(zernike[(4, -4)] - 5 * polar['C54'] / 36. * np.sin(4 * polar['phi54']),
+                                zernike[(4, 4)] - 5 * polar['C54'] / 36. * np.cos(4 * polar['phi54'])) / 4.
+
+    polar['C21'] = np.sqrt((zernike[(3, -1)] - 4 * polar['C41'] / 50. * np.sin(polar['phi41'])) ** 2 +
+                           (zernike[(3, 1)] - 4 * polar['C41'] / 50. * np.cos(polar['phi41'])) ** 2) * 9
+    polar['phi21'] = np.arctan2(zernike[(3, -1)] - 4 * polar['C41'] / 50. * np.sin(polar['phi41']),
+                                zernike[(3, 1)] - 4 * polar['C41'] / 50. * np.cos(polar['phi41']))
+    polar['C23'] = np.sqrt((zernike[(3, -3)] - 4 * polar['C43'] / 25. * np.sin(3 * polar['phi43'])) ** 2 +
+                           (zernike[(3, 3)] - 4 * polar['C43'] / 25. * np.cos(3 * polar['phi43'])) ** 2) * 3
+    polar['phi23'] = np.arctan2(zernike[(3, -3)] - 4 * polar['C43'] / 25. * np.sin(3 * polar['phi43']),
+                                zernike[(3, 3)] - 4 * polar['C43'] / 25. * np.cos(3 * polar['phi43'])) / 3.
+
+    polar['C10'] = 4 * zernike[(2, 0)] - polar['C30'] / 2. - 3 / 10. * polar['C50']
+    polar['C12'] = np.sqrt((zernike[(2, -2)]
+                            - 3 * polar['C32'] / 16. * np.sin(2 * polar['phi32'])
+                            - (1 / 6. - 1 / 15.) * polar['C52'] * np.sin(2 * polar['phi52'])) ** 2 +
+                           (zernike[(2, 2)]
+                            - 3 * polar['C32'] / 16. * np.cos(2 * polar['phi32'])
+                            - (1 / 6. - 1 / 15.) * polar['C52'] * np.cos(2 * polar['phi52'])) ** 2) * 2
+    polar['phi12'] = np.arctan2(zernike[(2, -2)]
+                                - 3 * polar['C32'] / 16. * np.sin(2 * polar['phi32'])
+                                - (1 / 6. - 1 / 15.) * polar['C52'] * np.sin(2 * polar['phi52']),
+                                zernike[(2, 2)]
+                                - 3 * polar['C32'] / 16. * np.cos(2 * polar['phi32'])
+                                - (1 / 6. - 1 / 15.) * polar['C52'] * np.cos(2 * polar['phi52'])) / 2.
+
+    for symbol, value in polar.items():
+        if symbol[0] == 'C':
+            polar[symbol] /= aperture_radius ** (polar_aberration_order(symbol) + 1)
 
     return {key: value for key, value in polar.items() if value != 0.}
 
@@ -383,10 +574,10 @@ class PhaseAberration(FrequencyTransfer):
                  **kwargs):
 
         if parametrization.lower() == 'polar':
-            self._parameters = PolarAberrations(**kwargs)
+            self._parametrization = PolarAberrations(**kwargs)
 
         elif parametrization.lower() == 'cartesian':
-            self._parameters = CartesianAberrations(**kwargs)
+            self._parametrization = CartesianAberrations(**kwargs)
 
         else:
             raise RuntimeError()
@@ -394,36 +585,41 @@ class PhaseAberration(FrequencyTransfer):
         FrequencyTransfer.__init__(self, extent=extent, gpts=gpts, sampling=sampling, energy=energy,
                                    save_tensor=save_tensor)
 
+        self._parametrization.register_observer(self)
+
+    def set_paramters(self, parameters):
+        self._parametrization.set_parameters(parameters)
+
     @property
-    def parameters(self):
-        return self._parameters
+    def parametrization(self):
+        return self._parametrization
 
     def _line_data(self, phi, k_max=2, n=1024):
         k = tf.linspace(0., k_max, n)
         alpha = self.wavelength * k
-        tensor = self.parameters(alpha=alpha, alpha2=alpha ** 2, phi=phi)
+        tensor = self.parametrization(alpha=alpha, alpha2=alpha ** 2, phi=phi)
 
         return k, complex_exponential(2 * np.pi / self.wavelength * tensor)
 
     def _calculate_tensor(self, alpha=None, alpha2=None, phi=None):
 
-        if isinstance(self._parameters, PolarAberrations):
+        if isinstance(self._parametrization, PolarAberrations):
             # if (alpha is None) | (alpha2 is None) | (phi is None):
             alpha_x, alpha_y = self.semiangles()
             alpha2 = squared_norm(alpha_x, alpha_y)
             alpha = tf.sqrt(alpha2)
             phi = angle(alpha_x, alpha_y)
 
-            tensor = self.parameters(alpha=alpha, alpha2=alpha2, phi=phi)[None, :, :]
+            tensor = self.parametrization(alpha=alpha, alpha2=alpha2, phi=phi)[None, :, :]
 
-        elif isinstance(self._parameters, CartesianAberrations):
+        elif isinstance(self._parametrization, CartesianAberrations):
             alpha_x, alpha_y = self.semiangles()
             alpha2 = squared_norm(alpha_x, alpha_y)
             alpha_y, alpha_x = tf.meshgrid(alpha_y, alpha_x)
             alpha_x_2 = alpha_x ** 2
             alpha_y_2 = alpha_y ** 2
 
-            tensor = self.parameters(ax=alpha_x, ay=alpha_y, ax2=alpha_x_2, ay2=alpha_y_2, a2=alpha2)[None, :, :]
+            tensor = self.parametrization(ax=alpha_x, ay=alpha_y, ax2=alpha_x_2, ay2=alpha_y_2, a2=alpha2)[None, :, :]
 
         else:
             raise RuntimeError('')
@@ -484,17 +680,14 @@ class CTF(FrequencyTransfer):
         self._energy = EnergyProperty(energy=energy)
 
         self._aberrations = PhaseAberration(extent=extent, save_tensor=save_tensor, **kwargs)
-
         self._aberrations._grid = self._grid
         self._aberrations._energy = self._energy
 
         self._aperture = Aperture(radius=aperture_radius, rolloff=aperture_rolloff, save_tensor=save_tensor)
-
         self._aperture._grid = self._grid
         self._aperture._energy = self._energy
 
         self._temporal_envelope = TemporalEnvelope(focal_spread=focal_spread, save_tensor=save_tensor)
-
         self._temporal_envelope._grid = self._grid
         self._temporal_envelope._energy = self._energy
 

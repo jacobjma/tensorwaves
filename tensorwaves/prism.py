@@ -60,26 +60,32 @@ class PrismAberration(PrismCoefficients):
     def __init__(self, kx, ky, energy=None, save_tensor=True, parametrization='polar', **kwargs):
 
         if parametrization.lower() == 'polar':
-            self._parameters = PolarAberrations(**kwargs)
+            self._parametrization = PolarAberrations(**kwargs)
 
         else:
             raise RuntimeError()
 
         PrismCoefficients.__init__(self, kx=kx, ky=ky, energy=energy, save_tensor=save_tensor)
 
-        self._parameters.register_observer(self)
+        self._parametrization.register_observer(self)
 
     @property
-    def parameters(self):
-        return self._parameters
+    def parametrization(self):
+        return self._parametrization
+
+    def set_parameters(self, parameters):
+        self.notify_observers({'change': True})
+
+        self.parametrization.set_parameters(parameters)
 
     def _calculate_tensor(self):
+
         alpha_x = self.kx * self.wavelength
         alpha_y = self.ky * self.wavelength
         alpha2 = alpha_x ** 2 + alpha_y ** 2
         alpha = tf.sqrt(alpha2)
         phi = tf.atan2(alpha_x, alpha_y)
-        tensor = self.parameters(alpha=alpha, alpha2=alpha2, phi=phi)
+        tensor = self.parametrization(alpha=alpha, alpha2=alpha2, phi=phi)
 
         return complex_exponential(- 2 * np.pi / self.wavelength * tensor)
 
