@@ -83,7 +83,7 @@ class RingDetector(DetectorWithEnergy, TensorFactory):
     def detect(self, wave):
         self.match(wave)
 
-        intensity = tf.abs(tf.fft2d(wave.get_tensor().tensorflow())) ** 2
+        intensity = tf.abs(tf.signal.fft2d(wave.tensorflow())) ** 2
 
         if self._integrate:
             return tf.reduce_sum(intensity * self.get_tensor(), axis=(1, 2)) / tf.reduce_sum(intensity, axis=(1, 2))

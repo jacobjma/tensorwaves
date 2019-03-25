@@ -4,38 +4,19 @@ import numpy as np
 import tensorflow as tf
 from ase import Atoms
 
-from tensorwaves.bases import HasGrid, HasEnergy, TensorFactory, TensorWithEnergy, notifying_property, Grid, \
-    EnergyProperty, complex_exponential
+from tensorwaves.bases import HasGrid, HasEnergy, HasGridAndEnergy, TensorFactory, TensorWithEnergy, notifying_property, \
+    Grid, EnergyProperty
 from tensorwaves.potentials import Potential
 from tensorwaves.prism import PrismAperture, PrismAberration, PrismTranslate
 from tensorwaves.scan import LineScan, GridScan
 from tensorwaves.transfer import CTF, Translate
-from tensorwaves.utils import ProgressBar
-
-
-def fourier_propagator(k, dz, wavelength):
-    x = -k * np.pi * wavelength * dz
-    return complex_exponential(x)
+from tensorwaves.utils import ProgressBar, complex_exponential, fourier_propagator
 
 
 class TensorWaves(TensorWithEnergy):
 
     def __init__(self, tensor, extent=None, sampling=None, energy=None):
         TensorWithEnergy.__init__(self, tensor, extent=extent, sampling=sampling, energy=energy, space='direct')
-
-    def get_tensor(self):
-        return self
-
-    def match(self, other):
-        try:
-            self._grid.match(other._grid)
-        except AttributeError:
-            pass
-
-        try:
-            self._energy.match(other._energy)
-        except AttributeError:
-            pass
 
     def multislice(self, potential, in_place=False, progress_tracker=None):
 
@@ -75,7 +56,7 @@ class TensorWaves(TensorWithEnergy):
         return fourier_propagator(((kx ** 2)[:, None] + (ky ** 2)[None, :]), dz, self.wavelength)[None, :, :]
 
     def _fourier_convolution(self, propagator):
-        return tf.ifft2d(tf.fft2d(self._tensorflow) * propagator)
+        return tf.signal.ifft2d(tf.signal.fft2d(self._tensorflow) * propagator)
 
     def apply_frequency_transfer(self, frequency_transfer, in_place=False):
         self.match(frequency_transfer)
@@ -83,7 +64,7 @@ class TensorWaves(TensorWithEnergy):
         self.check_is_defined()
         frequency_transfer.check_is_defined()
 
-        tensor = tf.ifft2d(tf.fft2d(self._tensorflow) * frequency_transfer.get_tensor().tensorflow())
+        tensor = tf.signal.ifft2d(tf.signal.fft2d(self._tensorflow) * frequency_transfer.get_tensor().tensorflow())
 
         if in_place:
             self._tensorflow = tensor
@@ -98,43 +79,27 @@ class TensorWaves(TensorWithEnergy):
 
         return self.apply_frequency_transfer(frequency_transfer=ctf, in_place=in_place)
 
-    def detect(self):
-        from tensorwaves.image import Image
-        return Image(tf.abs(self._tensorflow) ** 2, extent=self.extent.copy())
+    def intensity(self):
+        return tf.abs(self._tensorflow) ** 2
 
-    def semiangles(self):
-        kx, ky = self._grid.fftfreq()
-        wavelength = self.wavelength
-        return kx * wavelength, ky * wavelength
+    def image(self):
+        from tensorwaves.image import Image
+        return Image(self.intensity(), extent=self.extent.copy())
 
     def copy(self):
         return self.__class__(tensor=tf.identity(self._tensorflow), extent=self.extent.copy(), energy=self.energy)
 
 
-class WaveFactory(HasGrid, HasEnergy, TensorFactory):
+class WaveFactory(HasGridAndEnergy, HasGrid, HasEnergy, TensorFactory):
 
     def __init__(self, extent=None, gpts=None, sampling=None, energy=None, save_tensor=True):
+        HasGridAndEnergy.__init__(self)
         HasGrid.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
         HasEnergy.__init__(self, energy=energy)
         TensorFactory.__init__(self, save_tensor=save_tensor)
 
         self._grid.register_observer(self)
         self._energy.register_observer(self)
-
-    def check_is_defined(self):
-        self._grid.check_is_defined()
-        self._energy.check_is_defined()
-
-    def match(self, other):
-        try:
-            self._grid.match(other._grid)
-        except AttributeError:
-            pass
-
-        try:
-            self._energy.match(other._energy)
-        except AttributeError:
-            pass
 
     def multislice(self, potential, in_place=False):
         if isinstance(potential, Atoms):
@@ -155,29 +120,8 @@ class PlaneWaves(WaveFactory):
     num_waves = notifying_property('_num_waves')
 
     def _calculate_tensor(self):
-        self.check_is_defined()
         return TensorWaves(tf.ones((self.num_waves, self.gpts[0], self.gpts[1]), dtype=tf.complex64),
                            extent=self.extent, energy=self.energy)
-
-
-class Scanable(object):
-
-    @property
-    def positions(self):
-        raise NotImplementedError()
-
-    @positions.setter
-    def positions(self, value):
-        raise NotImplementedError()
-
-    def linescan(self, start, end, num_positions=None, sampling=None, endpoint=True, detectors=None, potential=None,
-                 max_batch=1):
-        scan = LineScan(scanable=self, detectors=detectors, start=start, end=end, num_positions=num_positions,
-                        sampling=sampling, endpoint=endpoint)
-
-        scan.scan(max_batch=max_batch, potential=potential)
-
-        return scan
 
 
 class ProbeWaves(WaveFactory):
@@ -258,10 +202,9 @@ class ProbeWaves(WaveFactory):
         return scan
 
     def _calculate_tensor(self):
-        self.check_is_defined()
-
-        return TensorWaves(tf.fft2d(self.ctf.get_tensor().tensorflow() * self.translate.get_tensor().tensorflow()),
-                           extent=self.extent, energy=self.energy)
+        return TensorWaves(
+            tf.signal.fft2d(self.ctf.get_tensor().tensorflow() * self.translate.get_tensor().tensorflow()),
+            extent=self.extent, energy=self.energy)
 
 
 class PrismWaves(WaveFactory):
@@ -277,8 +220,6 @@ class PrismWaves(WaveFactory):
         return self.get_tensor()
 
     def _calculate_tensor(self):
-        self.check_is_defined()
-
         n_max = np.ceil(self.cutoff / (self.wavelength / self.extent[0] * self.interpolation))
         m_max = np.ceil(self.cutoff / (self.wavelength / self.extent[1] * self.interpolation))
 
@@ -303,11 +244,11 @@ class PrismWaves(WaveFactory):
 
 def wrapped_slice(tensor, begin, size):
     shift = [-x for x in begin]
-    tensor = tf.manip.roll(tensor, shift, list(range(len(begin))))
+    tensor = tf.roll(tensor, shift, list(range(len(begin))))
     return tf.slice(tensor, [0] * len(begin), size)
 
 
-class ScatteringMatrix(TensorFactory, TensorWaves):
+class ScatteringMatrix(TensorWaves, TensorFactory):
 
     def __init__(self, expansion, kx, ky, interpolation, position=None, extent=None, sampling=None, energy=None,
                  save_tensor=True, **kwargs):
@@ -322,8 +263,8 @@ class ScatteringMatrix(TensorFactory, TensorWaves):
         self._ky = ky
         self._interpolation = interpolation
 
-        TensorFactory.__init__(self, save_tensor=save_tensor)
         TensorWaves.__init__(self, tensor=expansion, extent=extent, sampling=sampling)
+        TensorFactory.__init__(self, save_tensor=save_tensor)
 
         self._energy = EnergyProperty(energy=energy)
 
@@ -446,14 +387,14 @@ class ScatteringMatrix(TensorFactory, TensorWaves):
                  np.round((self.position[1] - self.extent[1] / (2 * self.interpolation)) /
                           self.sampling[1]).astype(int)]
 
-        size = [self.kx.shape[0].value,
+        size = [self.kx.shape[0],
                 np.ceil(self.gpts[0] / self.interpolation).astype(int),
                 np.ceil(self.gpts[1] / self.interpolation).astype(int)]
 
         tensor = coefficients[:, None, None] * wrapped_slice(self._tensorflow, begin, size)
 
-        return TensorWaves(tensor=tf.reduce_sum(tensor, axis=0, keep_dims=True),
-                           extent=self.extent / self.interpolation, energy=self.energy)
+        return TensorWaves(tensor=tf.reduce_sum(tensor, axis=0, keepdims=True), extent=self.extent / self.interpolation,
+                           energy=self.energy)
 
     def copy(self):
         return self.__class__(expansion=self._tensorflow, kx=self._kx, ky=self._ky, interpolation=self._interpolation,

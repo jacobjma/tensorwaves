@@ -16,7 +16,7 @@ def test_tem():
 
     wave = wave.apply_ctf(defocus=700, Cs=-1.3e7, aperture_radius=.01037)
 
-    image = wave.detect()
+    image = wave.image()
 
     assert np.allclose(image.numpy()[0, ::32, 256], [1.0071477, 1.0019431, 0.9894879, 1.0007411, 1.0109925, 0.9310855,
                                                      0.99967396, 0.9988709, 0.89847034, 1.0050664, 1.002859, 0.8524643,

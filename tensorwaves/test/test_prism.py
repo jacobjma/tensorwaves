@@ -5,8 +5,6 @@ from ase import Atoms
 from ..waves import ProbeWaves, PrismWaves
 from ..detect import RingDetector
 
-tf.enable_eager_execution()
-
 
 def test_prism_probe():
     probe = ProbeWaves(extent=8, gpts=512, energy=100e3, aperture_radius=0.01)
@@ -41,7 +39,7 @@ def test_prism_multislice():
     probe = ProbeWaves(gpts=512, energy=100e3, aperture_radius=0.02)
     probe.positions = (2, 2)
     probe = probe.multislice(atoms)
-    probe_image = np.abs(probe.get_tensor().numpy()) ** 2
+    probe_image = np.abs(probe.numpy()) ** 2
 
     prism = PrismWaves(gpts=512, energy=100e3, cutoff=0.02)
     S = prism.multislice(atoms)

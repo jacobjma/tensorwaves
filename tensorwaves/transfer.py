@@ -3,43 +3,24 @@ from collections import defaultdict
 import numpy as np
 import tensorflow as tf
 
-from tensorwaves.bases import TensorWithEnergy, Tensor, notifying_property, named_property, Observable, \
-    HasGrid, HasEnergy, TensorFactory, Grid, EnergyProperty
-from tensorwaves.bases import complex_exponential
+from tensorwaves.bases import TensorWithEnergy, Tensor, notifying_property, Observable, HasGrid, HasEnergy, \
+    HasGridAndEnergy, TensorFactory, Grid, EnergyProperty
 from tensorwaves.ops import squared_norm, angle
+from tensorwaves.utils import complex_exponential
 
 
-class FrequencyTransfer(HasGrid, HasEnergy, TensorFactory, Observable):
+class FrequencyTransfer(HasGrid, HasEnergy, HasGridAndEnergy, TensorFactory, Observable):
 
     def __init__(self, extent=None, gpts=None, sampling=None, energy=None, save_tensor=True):
         HasGrid.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
         HasEnergy.__init__(self, energy=energy)
+        HasGridAndEnergy.__init__(self)
         TensorFactory.__init__(self, save_tensor=save_tensor)
         Observable.__init__(self)
 
         self._grid.register_observer(self)
         self._energy.register_observer(self)
         self.register_observer(self)
-
-    def check_is_defined(self):
-        self._grid.check_is_defined()
-        self._energy.check_is_defined()
-
-    def match(self, other):
-        try:
-            self._grid.match(other._grid)
-        except AttributeError:
-            pass
-
-        try:
-            self._energy.match(other._energy)
-        except AttributeError:
-            pass
-
-    def semiangles(self):
-        kx, ky = self._grid.fftfreq()
-        wavelength = self.wavelength
-        return kx * wavelength, ky * wavelength
 
 
 class Aperture(FrequencyTransfer):
@@ -90,9 +71,7 @@ class TemporalEnvelope(FrequencyTransfer):
             alpha = tf.sqrt(squared_norm(*self.semiangles()))
 
         if self.focal_spread > 0.:
-            tensor = tf.exp(
-                -tf.sign(self.focal_spread) * (
-                        .5 * np.pi / self.wavelength * self.focal_spread * alpha ** 2) ** 2)
+            tensor = tf.exp(- (.5 * np.pi / self.wavelength * self.focal_spread * alpha ** 2) ** 2)
         else:
             tensor = tf.ones(alpha.shape)
 
@@ -429,8 +408,6 @@ class ZernikeAberrations(Parametrization):
             expansion.append(zernike_polynomial(k, phi, n, m))
             coefficients.append(value)
 
-        # print()
-        # sss
         expansion = tf.convert_to_tensor(expansion)
         coefficients = tf.convert_to_tensor(coefficients)
 
@@ -602,9 +579,7 @@ class PhaseAberration(FrequencyTransfer):
         return k, complex_exponential(2 * np.pi / self.wavelength * tensor)
 
     def _calculate_tensor(self, alpha=None, alpha2=None, phi=None):
-
         if isinstance(self._parametrization, PolarAberrations):
-            # if (alpha is None) | (alpha2 is None) | (phi is None):
             alpha_x, alpha_y = self.semiangles()
             alpha2 = squared_norm(alpha_x, alpha_y)
             alpha = tf.sqrt(alpha2)

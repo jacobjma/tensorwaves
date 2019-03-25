@@ -19,6 +19,9 @@ def test_tensorfactory():
             self.observable = DummyObservable()
             self.observable.register_observer(self)
 
+        def check_is_defined(self):
+            pass
+
         def _calculate_tensor(self):
             return self.observable.x * tf.ones((2, 2), dtype=tf.float32)
 

@@ -1,11 +1,9 @@
 import numpy as np
-
-from ..waves import PrismWaves
-from ..zernike import ZernikeExpansion
-from ..transfer import polar2zernike, zernike2polar, ZernikeAberrations
-
-import tensorflow as tf
 import pytest
+import tensorflow as tf
+
+from ..transfer import polar2zernike, zernike2polar
+from ..waves import PrismWaves
 
 tf.enable_eager_execution()
 

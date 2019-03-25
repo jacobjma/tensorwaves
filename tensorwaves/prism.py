@@ -1,11 +1,12 @@
 import numpy as np
 import tensorflow as tf
 
-from tensorwaves.bases import TensorFactory, HasEnergy, notifying_property, complex_exponential, Observable
+from tensorwaves.bases import TensorFactory, HasEnergy, notifying_property, Observable
 from tensorwaves.transfer import PolarAberrations
+from tensorwaves.utils import complex_exponential
 
 
-class PrismCoefficients(TensorFactory, HasEnergy, Observable):
+class PrismCoefficients(HasEnergy, TensorFactory, Observable):
 
     def __init__(self, kx, ky, energy=None, save_tensor=True):
         self._kx = kx

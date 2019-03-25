@@ -72,7 +72,12 @@ class TensorFactory(Observer):
     def _calculate_tensor(self, *args):
         raise NotImplementedError()
 
+    def check_is_defined(self):
+        raise NotImplementedError()
+
     def get_tensor(self):
+        self.check_is_defined()
+
         if self.up_to_date & self._save_tensor:
             data = self._tensor
         else:
@@ -118,7 +123,7 @@ def linspace_no_endpoint(start, stop, num, dtype=tf.float32):
     """
     start = tf.cast(start, dtype=dtype)
     interval = stop - start
-    return tf.lin_space(start, interval - interval / tf.cast(num, tf.float32), num)
+    return tf.linspace(start, interval - interval / tf.cast(num, tf.float32), num)
 
 
 def fftfreq(n, d):
@@ -140,8 +145,8 @@ def fftfreq(n, d):
         Tensor of length n containing the sample frequencies.
     """
     m = (n - 1) // 2 + 1
-    p1 = tf.lin_space(0., m - 1, m)
-    p2 = tf.lin_space(-tf.cast(n // 2, tf.float32), -1, n // 2)
+    p1 = tf.linspace(0., m - 1, m)
+    p2 = tf.linspace(-tf.cast(n // 2, tf.float32), -1, n // 2)
     return tf.concat((p1, p2), axis=0) / (n * d)
 
 
@@ -184,7 +189,7 @@ class GridProperty(object):
             pass
 
         else:
-            raise RuntimeError('')
+            raise RuntimeError('{}'.format(value))
 
         return value
 
@@ -244,12 +249,18 @@ class Grid(Observable):
 
     @property
     def extent(self):
+        if self._gpts.locked & self._sampling.locked:
+            return self._adjusted_extent()
+
         return self._extent.value
 
     @extent.setter
     def extent(self, value):
         old = self._extent.value
         self._extent.value = value
+
+        if self._gpts.locked & self._sampling.locked:
+            raise RuntimeError()
 
         if not (self._gpts.locked | (self.extent is None) | (self.sampling is None)):
             self._gpts.value = self._adjusted_gpts()
@@ -262,12 +273,18 @@ class Grid(Observable):
 
     @property
     def gpts(self):
+        if self._extent.locked & self._sampling.locked:
+            return self._adjusted_sampling()
+
         return self._gpts.value
 
     @gpts.setter
     def gpts(self, value):
         old = self._gpts.value
         self._gpts.value = value
+
+        if self._extent.locked & self._sampling.locked:
+            raise RuntimeError()
 
         if not (self._sampling.locked | (self.extent is None) | (self.gpts is None)):
             self._sampling.value = self._adjusted_sampling()
@@ -279,12 +296,18 @@ class Grid(Observable):
 
     @property
     def sampling(self):
+        if self._gpts.locked & self._extent.locked:
+            return self._adjusted_sampling()
+
         return self._sampling.value
 
     @sampling.setter
     def sampling(self, value):
         old = self._sampling.value
         self._sampling.value = value
+
+        if self._gpts.locked & self._extent.locked:
+            raise RuntimeError()
 
         if not (self._gpts.locked | (self.extent is None) | (self.sampling is None)):
             self._gpts.value = self._adjusted_gpts()
@@ -377,6 +400,9 @@ class HasGrid(object):
 
     def fftfreq(self):
         return self._grid.fftfreq()
+
+    def check_is_defined(self):
+        self._grid.check_is_defined()
 
 
 def energy2mass(energy):
@@ -487,6 +513,32 @@ class HasEnergy(object):
     wavelength = referenced_property('_energy', 'wavelength')
     sigma = referenced_property('_energy', 'sigma')
 
+    def check_is_defined(self):
+        self._energy.check_is_defined()
+
+
+class HasGridAndEnergy(object):
+
+    def check_is_defined(self):
+        self._grid.check_is_defined()
+        self._energy.check_is_defined()
+
+    def match(self, other):
+        try:
+            self._grid.match(other._grid)
+        except AttributeError:
+            pass
+
+        try:
+            self._energy.match(other._energy)
+        except AttributeError:
+            pass
+
+    def semiangles(self):
+        kx, ky = self._grid.fftfreq()
+        wavelength = self.wavelength
+        return kx * wavelength, ky * wavelength
+
 
 class Tensor(HasGrid):
 
@@ -501,10 +553,7 @@ class Tensor(HasGrid):
 
     @property
     def gpts(self):
-        return np.array([dim.value for dim in self._tensorflow.shape[1:]])
-
-    def check_is_defined(self):
-        self._grid.check_is_defined()
+        return np.array([dim for dim in self._tensorflow.shape[1:]])
 
     def tensorflow(self):
         return self._tensorflow
@@ -521,65 +570,9 @@ class Tensor(HasGrid):
         pass
 
 
-class TensorWithEnergy(Tensor, HasEnergy):
+class TensorWithEnergy(Tensor, HasEnergy, HasGridAndEnergy):
 
     def __init__(self, tensor, extent=None, sampling=None, energy=None, space='direct'):
         Tensor.__init__(self, tensor=tensor, extent=extent, sampling=sampling, space=space)
         HasEnergy.__init__(self, energy=energy)
-
-    def check_is_defined(self):
-        self._grid.check_is_defined()
-        self._energy.check_is_defined()
-
-
-def complex_exponential(x):
-    return tf.complex(tf.cos(x), tf.sin(x))
-
-
-# class Showable(HasGrid):
-#
-#     def __init__(self, extent=None, gpts=None, sampling=None, grid=None, space=None):
-#         self._space = space
-#
-#         HasGrid.__init__(self, extent=extent, gpts=gpts, sampling=sampling, grid=grid)
-#
-#     @property
-#     def space(self):
-#         return self._space
-#
-#     def get_showable_tensor(self, i=0):
-#         raise NotImplementedError()
-#
-#     def show(self, i=None, space='direct', mode='magnitude', scale='linear', fig_scale=1, **kwargs):
-#         from tensorwaves.plotutils import show_array
-#         array = self.get_showable_tensor(i).numpy()
-#
-#         # if i is not None:
-#         #    array = array[i][None]
-#
-#         show_array(array, extent=self.grid.extent, space=self.space, display_space=space, mode=mode, scale=scale,
-#                    fig_scale=fig_scale, **kwargs)
-#
-#
-# class ShowableWithEnergy(Showable, HasAccelerator):
-#
-#     def __init__(self, extent=None, gpts=None, sampling=None, grid=None, space=None, energy=None, accelerator=None):
-#         Showable.__init__(self, extent=extent, gpts=gpts, sampling=sampling, grid=grid, space=space)
-#         HasAccelerator.__init__(self, energy=energy, accelerator=accelerator)
-#
-#     def match(self, other):
-#         other.grid.match(self.grid)
-#         other.accelerator.match(self.accelerator)
-#
-#
-
-#
-#
-# class TensorWithEnergy(Tensor, HasAccelerator):
-#
-#     def __init__(self, tensor, extent=None, sampling=None, grid=None, space=None, energy=None, accelerator=None):
-#         Tensor.__init__(self, tensor, extent=extent, sampling=sampling, space=space, grid=grid)
-#         HasAccelerator.__init__(self, energy=energy, accelerator=accelerator)
-#
-#
-#
+        HasGridAndEnergy.__init__(self)

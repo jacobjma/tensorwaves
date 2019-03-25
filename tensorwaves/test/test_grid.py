@@ -2,8 +2,9 @@ import pytest
 import numpy as np
 import tensorflow as tf
 
-from ..bases import linspace_no_endpoint, fftfreq, GridProperty, Grid, HasGrid
+from ..bases import linspace_no_endpoint, fftfreq, GridProperty, Grid, Tensor, TensorWithEnergy
 from ..transfer import FrequencyTransfer, Aperture, TemporalEnvelope, PhaseAberration, CTF
+from ..potentials import Potential
 from ..waves import WaveFactory, PlaneWaves, ProbeWaves, PrismWaves
 from .test_utils import CallCounter
 
@@ -54,10 +55,10 @@ def test_grid_property():
 
 
 @pytest.mark.parametrize('has_grid',
-                         [Grid,
+                         [Grid,  # Tensor, TensorWithEnergy,
                           FrequencyTransfer, Aperture, TemporalEnvelope, PhaseAberration, CTF,
                           WaveFactory, PlaneWaves, ProbeWaves, PrismWaves])
-def test_grid(has_grid):
+def test_has_grid(has_grid):
     grid = has_grid(extent=5, sampling=.2)
 
     assert np.all(grid.extent == np.array([5, 5], dtype=np.float32))
@@ -116,10 +117,11 @@ def test_grid(has_grid):
                          [FrequencyTransfer, Aperture, TemporalEnvelope, PhaseAberration, CTF,
                           WaveFactory, PlaneWaves, ProbeWaves, PrismWaves])
 def test_grid_update(tensorfactory_with_grid):
-    instance = tensorfactory_with_grid(extent=10)
+    instance = tensorfactory_with_grid(extent=10, sampling=.1)
 
     counter = CallCounter(lambda: instance.extent)
     instance._calculate_tensor = counter.func_caller
+    instance.check_is_defined = lambda: None
 
     assert instance.up_to_date == False
     assert np.all(instance.get_tensor() == np.array([10, 10], dtype=np.float32))
@@ -138,3 +140,9 @@ def test_grid_update(tensorfactory_with_grid):
     assert instance.up_to_date == True
     instance.get_tensor()
     assert counter.n == 2
+
+    #instance = tensorfactory_with_grid()
+    #with pytest.raises(RuntimeError) as exc_info:
+    #    instance.get_tensor()
+    #
+    #assert str(exc_info.value) == 'grid is not defined'

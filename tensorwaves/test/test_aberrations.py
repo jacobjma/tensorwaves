@@ -10,6 +10,7 @@ def test_notifying(parametrization):
 
     counter = CallCounter(lambda: None)
     aberrations._calculate_tensor = counter.func_caller
+    aberrations.check_is_defined = lambda: None
 
     assert aberrations.up_to_date == False
 

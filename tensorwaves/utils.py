@@ -4,20 +4,6 @@ from collections import OrderedDict
 import numpy as np
 import tensorflow as tf
 from IPython.display import clear_output
-from ase import units
-
-EPS = 1e-12
-
-
-
-
-
-
-
-
-
-
-
 
 
 def batch_generator(n_items, max_batch_size):
@@ -55,15 +41,9 @@ def cell_is_rectangular(cell, tol=1e-12):
     return np.all(np.abs(cell[~np.eye(cell.shape[0], dtype=bool)]) < tol)
 
 
-
-
-
 def fft_shift(tensor, axes):
     shift = [tensor.shape[axis].value // 2 for axis in axes]
     return tf.manip.roll(tensor, shift, axes)
-
-
-
 
 
 class ProgressTracker(object):

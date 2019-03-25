@@ -21,13 +21,15 @@ def conv2d_block(input_tensor, n_filters, kernel_size=3, batchnorm=True):
     return x
 
 
-def get_unet(n_filters=16, dropout=0.5, batchnorm=True):
-    input_img = keras.Input((None, None, 1))
+def get_unet(out_channels, n_filters=16, levels=3, dropout=0.5, batchnorm=True, train=True):
+    images = keras.Input((None, None, 1))
+    if train:
+        labels = keras.Input((None, None, out_channels))
 
     # contracting path
-    c1 = conv2d_block(input_img, n_filters=n_filters * 1, kernel_size=3, batchnorm=batchnorm)
+    c1 = conv2d_block(images, n_filters=n_filters * 1, kernel_size=3, batchnorm=batchnorm)
     p1 = keras.layers.MaxPooling2D((2, 2))(c1)
-    p1 = keras.layers.Dropout(dropout * 0.5)(p1)
+    p1 = keras.layers.Dropout(dropout)(p1)
 
     c2 = conv2d_block(p1, n_filters=n_filters * 2, kernel_size=3, batchnorm=batchnorm)
     p2 = keras.layers.MaxPooling2D((2, 2))(c2)
@@ -36,20 +38,9 @@ def get_unet(n_filters=16, dropout=0.5, batchnorm=True):
     c3 = conv2d_block(p2, n_filters=n_filters * 4, kernel_size=3, batchnorm=batchnorm)
     p3 = keras.layers.MaxPooling2D((2, 2))(c3)
     p3 = keras.layers.Dropout(dropout)(p3)
-
     c4 = conv2d_block(p3, n_filters=n_filters * 8, kernel_size=3, batchnorm=batchnorm)
-    p4 = keras.layers.MaxPooling2D(pool_size=(2, 2))(c4)
-    p4 = keras.layers.Dropout(dropout)(p4)
 
-    c5 = conv2d_block(p4, n_filters=n_filters * 16, kernel_size=3, batchnorm=batchnorm)
-
-    # expansive path
-    u6 = keras.layers.Conv2DTranspose(n_filters * 8, (3, 3), strides=(2, 2), padding='same')(c5)
-    u6 = keras.layers.concatenate([u6, c4])
-    u6 = keras.layers.Dropout(dropout)(u6)
-    c6 = conv2d_block(u6, n_filters=n_filters * 8, kernel_size=3, batchnorm=batchnorm)
-
-    u7 = keras.layers.Conv2DTranspose(n_filters * 4, (3, 3), strides=(2, 2), padding='same')(c6)
+    u7 = keras.layers.Conv2DTranspose(n_filters * 4, (3, 3), strides=(2, 2), padding='same')(c4)
     u7 = keras.layers.concatenate([u7, c3])
     u7 = keras.layers.Dropout(dropout)(u7)
     c7 = conv2d_block(u7, n_filters=n_filters * 4, kernel_size=3, batchnorm=batchnorm)
@@ -64,33 +55,43 @@ def get_unet(n_filters=16, dropout=0.5, batchnorm=True):
     u9 = keras.layers.Dropout(dropout)(u9)
     c9 = conv2d_block(u9, n_filters=n_filters * 1, kernel_size=3, batchnorm=batchnorm)
 
-    outputs = keras.layers.Conv2D(3, (1, 1), activation='softmax')(c9)
-    model = keras.Model(inputs=[input_img], outputs=[outputs])
-    return model
+    if out_channels == 1:
+        predictions = keras.layers.Conv2D(1, (1, 1), activation='sigmoid', name='predictions')(c9)
+    else:
+        predictions = keras.layers.Conv2D(out_channels, (1, 1), activation='softmax', name='predictions')(c9)
+
+    confidence = keras.layers.Conv2D(1, (1, 1), activation='sigmoid', name='confidence')(c9)
+
+    def corrected_predictions_func(tensors):
+        predictions, labels, confidence = tensors
+        return confidence * predictions + (1 - confidence) * labels
+
+    if train:
+        corrected_predictions = keras.layers.Lambda(corrected_predictions_func, name='corrected_predictions')(
+            [predictions, labels, confidence])
+
+        return keras.Model(inputs=[images, labels], outputs=[corrected_predictions, confidence])
+    else:
+        return keras.Model(inputs=[images], outputs=[predictions, confidence])
 
 
-def get_weighted_pixelwise_crossentropy(class_weights=1):
-    # if isinstance(class_weights, numbers.Number):
-    #    pass
-    # else:
-    #    class_weights = np.append(class_weights, 1)[None, None, None, :]
+def pixel_weights(labels):
+    weights = tf.reduce_sum(labels, axis=(1, 2), keep_dims=True)
+    weights /= tf.reduce_sum(weights, axis=3, keep_dims=True)
+    weights = weights + 1e-5
+    return tf.reduce_sum(labels / weights, axis=3, keep_dims=True)
 
-    weigths = tf.convert_to_tensor([1, 2], dtype=tf.float32)[None, None, None, :]
 
-    def weighted_pixelwise_crossentropy(target, output):
-        output /= tf.reduce_sum(output, -1, True)
+def get_weighted_pixelwise_crossentropy(pixel_weights_func):
+    _epsilon = tf.convert_to_tensor(tf.keras.backend.epsilon(), tf.float32)
 
-        _epsilon = tf.convert_to_tensor(keras.backend.epsilon(), output.dtype.base_dtype)
+    def weighted_pixelwise_crossentropy(labels, predictions):
+        predictions /= tf.reduce_sum(predictions, -1, True)
 
-        output = tf.clip_by_value(output, _epsilon, 1. - _epsilon)
+        predictions = tf.clip_by_value(predictions, _epsilon, 1. - _epsilon)
 
-        # shape = output.get_shape().as_list()
-        # shape[-1] = 1
+        pixel_weights = pixel_weights_func(labels)
 
-        pixel_weights = 1 + tf.reduce_sum(target[:, :, :, :-1] * weigths, axis=-1, keepdims=True)
-
-        # pixel_weights = 1 + target[..., 0, None] + 2 * target[..., 1, None]
-
-        return - tf.reduce_sum(tf.multiply(target * tf.log(output), pixel_weights), -1)
+        return - tf.reduce_sum(tf.multiply(labels * tf.log(predictions), pixel_weights), -1)
 
     return weighted_pixelwise_crossentropy

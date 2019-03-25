@@ -31,7 +31,6 @@ def test_energy_property():
                           FrequencyTransfer, Aperture, TemporalEnvelope, PhaseAberration, CTF,
                           WaveFactory, PlaneWaves, ProbeWaves, PrismWaves])
 def test_has_energy(has_energy):
-
     instance = has_energy(energy=300e3)
     assert instance.energy == 300e3
     assert instance.wavelength == energy2wavelength(300e3)
@@ -48,6 +47,7 @@ def test_energy_update(tensorfactory_with_energy):
 
     counter = CallCounter(lambda: instance.energy)
     instance._calculate_tensor = counter.func_caller
+    instance.check_is_defined = lambda: None
 
     assert instance.up_to_date == False
     assert instance.get_tensor() == 300e3
@@ -66,3 +66,5 @@ def test_energy_update(tensorfactory_with_energy):
     assert instance.up_to_date == True
     instance.get_tensor()
     assert counter.n == 2
+
+    instance = tensorfactory_with_energy()

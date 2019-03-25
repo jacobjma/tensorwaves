@@ -4,10 +4,10 @@ import os
 import numpy as np
 import tensorflow as tf
 from ase import units
-
 from scipy.optimize import brentq
 
-from tensorwaves.bases import Tensor, TensorFactory, HasGrid
+from tensorwaves.bases import Tensor, TensorFactory, HasGrid, GridProperty
+from tensorwaves.interpolate_spline import interpolate_spline
 from tensorwaves.utils import batch_generator
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
@@ -35,8 +35,8 @@ def log_grid(start, stop, num):
     """
     start = tf.cast(start, tf.float32)
     stop = tf.cast(stop, tf.float32)
-    dt = tf.log(stop / start) / (num - 1)
-    return tf.cast(start * tf.exp(dt * tf.lin_space(0., num - 1, num)), tf.float32)
+    dt = tf.math.log(stop / start) / (num - 1)
+    return tf.cast(start * tf.exp(dt * tf.linspace(0., num - 1, num)), tf.float32)
 
 
 class PotentialParameterization(object):
@@ -84,7 +84,7 @@ class PotentialParameterization(object):
         raise RuntimeError()
 
     def _find_cutoff(self, atomic_number):
-        #print(self.get_function(atomic_number))
+        # print(self.get_function(atomic_number))
         return np.float32(brentq(lambda x: (self.get_function(atomic_number)(x)) - self.tolerance, 1e-7, 1000))
 
     def get_cutoff(self, atomic_number):
@@ -266,20 +266,21 @@ class PotentialProjector(object):
         return tf.reduce_sum(function(rxy) * wkab[:, :, None], axis=1)
 
 
-class Potential(TensorFactory, HasGrid):
+class Potential(HasGrid, TensorFactory):
 
     def __init__(self, atoms=None, origin=None, extent=None, gpts=None, sampling=None, slice_thickness=.5,
                  num_slices=None, parametrization='lobato', periodic=True, method='splines', atoms_per_loop=10,
                  tolerance=1e-2, num_nodes=50, save_tensor=True):
 
-        TensorFactory.__init__(self, save_tensor=save_tensor)
         HasGrid.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
+        TensorFactory.__init__(self, save_tensor=save_tensor)
 
         self._atoms = None
         self._species = None
         self._origin = None
         self._positions = None
-        self.set_atoms(atoms, origin=origin, extent=extent)
+        if atoms is not None:
+            self.set_atoms(atoms, origin=origin, extent=extent)
 
         if num_slices is None:
             self._slice_thickness = slice_thickness
@@ -357,9 +358,6 @@ class Potential(TensorFactory, HasGrid):
     @property
     def slice_exit(self):
         return (self.current_slice + 1) * self.slice_thickness
-
-    def check_is_defined(self):
-        self._grid.check_is_defined()
 
     def set_atoms(self, atoms, origin=None, extent=None):
         self._atoms = atoms
@@ -449,7 +447,7 @@ class Potential(TensorFactory, HasGrid):
         margin = (self.get_margin() / min(self.sampling)).astype(np.int32)
         padded_gpts = self.gpts + 2 * margin
 
-        v = tf.contrib.eager.Variable(tf.zeros(padded_gpts[0] * padded_gpts[1]))
+        v = tf.Variable(tf.zeros(padded_gpts[0] * padded_gpts[1]))
 
         for atomic_number in self._species:
             positions = self.get_positions_in_slice(atomic_number)
@@ -490,8 +488,8 @@ class Potential(TensorFactory, HasGrid):
 
                     r_interp = tf.clip_by_value(r_interp, 0., tf.reduce_max(nodes))
 
-                    v_interp = tf.contrib.eager.Variable(tf.reshape(
-                        tf.contrib.image.interpolate_spline(
+                    v_interp = tf.Variable(tf.reshape(
+                        interpolate_spline(
                             tf.tile(nodes[None, :], (size, 1))[:, :, None],
                             batch_radials[:, :, None],
                             r_interp[:, :, None], 1), (-1,)))
@@ -500,7 +498,7 @@ class Potential(TensorFactory, HasGrid):
                     indices = tf.reshape(corner_indices[:, None, None] + block_indices[None, :, :], (-1, 1))
                     indices = tf.clip_by_value(indices, 0, v.shape[0] - 1)
 
-                    tf.scatter_nd_add(v, indices, v_interp)
+                    tf.compat.v1.scatter_nd_add(v, indices, v_interp)
 
         v = tf.reshape(v, padded_gpts)
         v = tf.slice(v, (margin, margin), self.gpts)
@@ -535,116 +533,194 @@ class Potential(TensorFactory, HasGrid):
 
         return ArrayPotential(array=new_array, box=box, num_slices=self.num_slices, projected=True)
 
-# class ArrayPotential(Showable):
-#
-#     def __init__(self, array, box, num_slices=None, projected=False):
-#
-#         self._array = np.float32(array - array.min())
-#
-#         if num_slices is None:
-#             num_slices = np.ceil(box[2] / .5).astype(np.int32)
-#
-#         if array.shape[2] % num_slices:
-#             raise RuntimeError()
-#
-#         extent = box[:2]
-#         gpts = GridProperty(lambda: np.array([dim for dim in self._array.shape[:2]]), dtype=np.int32, locked=True)
-#
-#         Showable.__init__(self, extent=extent, gpts=gpts, space='direct')
-#
-#         self._thickness = box[2]
-#         self._num_slices = num_slices
-#         self._projected = projected
-#
-#     def repeat(self, multiples):
-#         self._array = tf.tile(self._array, multiples)
-#         self.grid.extent = multiples[:2] * self.grid.extent
-#         self._thickness = multiples[2] * self._thickness
-#
-#     def set_view(self, origin, extent):
-#
-#         start = np.round(origin / self.grid.extent * self.grid.gpts).astype(np.int32)
-#         origin = start * self.grid.sampling
-#
-#         end = np.round((origin + extent) / self.grid.extent * self.grid.gpts).astype(np.int32)
-#         repeat = np.ceil(end / self.grid.gpts.astype(np.float)).astype(int)
-#
-#         new_array = np.tile(self._array, np.append(repeat, 1))
-#
-#         self._array = new_array[start[0]:end[0], start[1]:end[1], :]
-#
-#         self.grid.sampling = self.grid.sampling
-#
-#     @property
-#     def box(self):
-#         return np.concatenate((self.grid.extent, [self.thickness]))
-#
-#     @property
-#     def voxel_height(self):
-#         return self.thickness / self._array.shape[2]
-#
-#     @property
-#     def slice_thickness_voxels(self):
-#         return self._array.shape[2] // self.num_slices
-#
-#     @property
-#     def thickness(self):
-#         return self._thickness
-#
-#     @property
-#     def num_slices(self):
-#         return self._num_slices
-#
-#     @property
-#     def slice_thickness(self):
-#         return self.thickness / self.num_slices
-#
-#     def downsample(self):
-#         N, M = self.grid.gpts
-#
-#         X = np.fft.fft(self._array, axis=0)
-#         self._array = np.fft.ifft((X[:(N // 2), :] + X[-(N // 2):, :]) / 2., axis=0).real
-#
-#         X = np.fft.fft(self._array, axis=1)
-#         self._array = np.fft.ifft((X[:, :(M // 2)] + X[:, -(M // 2):]) / 2., axis=1).real
-#
-#         self.grid.extent = self.grid.extent
-#
-#     def project(self):
-#         if self._projected:
-#             raise RuntimeError()
-#
-#         new_array = np.zeros(tuple(np.append(self.grid.gpts, self.num_slices)), dtype=np.float32)
-#
-#         for i, tensor in enumerate(self.slice_generator()):
-#             new_array[..., i] = tensor
-#
-#         self._array = new_array
-#
-#         self._projected = True
-#
-#     def slice_generator(self):
-#         for i in range(self.num_slices):
-#             yield self._create_tensor(i)
-#
-#     def get_tensor(self, i=0):
-#         return Tensor(self._create_tensor(i), extent=self.grid.extent, space=self.space)
-#
-#     def _create_tensor(self, i=None):
-#
-#         if self._projected:
-#             return tf.convert_to_tensor(self._array[..., i][None, :, :], dtype=tf.float32)
-#
-#         return (tf.reduce_sum(self._array[:, :, i * self.slice_thickness_voxels:
-#                                                 i * self.slice_thickness_voxels + self.slice_thickness_voxels],
-#                               axis=2) * self.voxel_height)[None, :, :]
-#
-#     def copy(self):
-#         box = np.append(self.grid.extent, self.thickness)
-#         return self.__class__(array=self._array.copy(), box=box, num_slices=self._num_slices, projected=self._projected)
-#
-#
-# def potential_from_GPAW(calc):
-#     from gpaw.utilities.ps2ae import PS2AE
-#     potential_array = -PS2AE(calc).get_electrostatic_potential(ae=True)
-#     return ArrayPotential(array=potential_array, box=np.diag(calc.atoms.cell))
+
+def next_divisor(n, m):
+    if n % m:
+        if m > n // 2:
+            raise RuntimeError()
+        m += 1
+        return next_divisor(n, m)
+    else:
+        return m
+
+
+class ArrayPotential(HasGrid):
+
+    def __init__(self, array, box, num_slices=None, projected=False):
+
+        self._array = np.float32(array - array.min())
+
+        if num_slices is None:
+            num_slices = np.ceil(box[2] / .5).astype(np.int32)
+
+        if array.shape[2] % num_slices:
+            num_slices = next_divisor(array.shape[2], num_slices)
+
+        extent = box[:2]
+        gpts = GridProperty(lambda: np.array([dim for dim in self._array.shape[:2]]), dtype=np.int32, locked=True)
+
+        HasGrid.__init__(self, extent=extent, gpts=gpts)
+
+        self._thickness = box[2]
+        self._num_slices = num_slices
+        self._projected = projected
+
+    def numpy(self):
+        return self._array
+
+    def repeat(self, multiples):
+        self._array = tf.tile(self._array, multiples)
+        self.extent = multiples[:2] * self.extent
+        self._thickness = multiples[2] * self._thickness
+
+    def set_view(self, origin, extent):
+
+        start = np.round(origin / self.extent * self.gpts).astype(np.int32)
+        origin = start * self.sampling
+
+        end = np.round((origin + extent) / self.extent * self.gpts).astype(np.int32)
+        repeat = np.ceil(end / self.gpts.astype(np.float)).astype(int)
+
+        new_array = np.tile(self._array, np.append(repeat, 1))
+
+        self._array = new_array[start[0]:end[0], start[1]:end[1], :]
+
+        self.sampling = self.sampling
+
+    @property
+    def box(self):
+        return np.concatenate((self.extent, [self.thickness]))
+
+    @property
+    def voxel_height(self):
+        return self.thickness / self._array.shape[2]
+
+    @property
+    def slice_thickness_voxels(self):
+        return self._array.shape[2] // self.num_slices
+
+    @property
+    def thickness(self):
+        return self._thickness
+
+    @property
+    def num_slices(self):
+        return self._num_slices
+
+    @property
+    def slice_thickness(self):
+        return self.thickness / self.num_slices
+
+    def downsample(self):
+        N, M = self.gpts
+
+        X = np.fft.fft(self._array, axis=0)
+        self._array = np.fft.ifft((X[:(N // 2), :] + X[-(N // 2):, :]) / 2., axis=0).real
+
+        X = np.fft.fft(self._array, axis=1)
+        self._array = np.fft.ifft((X[:, :(M // 2)] + X[:, -(M // 2):]) / 2., axis=1).real
+
+        self.extent = self.extent
+
+    def project(self):
+        if self._projected:
+            raise RuntimeError()
+
+        new_array = np.zeros(tuple(np.append(self.gpts, self.num_slices)), dtype=np.float32)
+
+        for i, tensor in enumerate(self.slice_generator()):
+            new_array[..., i] = tensor
+
+        self._array = new_array
+
+        self._projected = True
+
+    def slice_generator(self):
+        for i in range(self.num_slices):
+            yield self._create_tensor(i)
+
+    def get_tensor(self, i=0):
+        return Tensor(self._create_tensor(i), extent=self.extent)
+
+    def _create_tensor(self, i=None):
+
+        if self._projected:
+            return tf.convert_to_tensor(self._array[..., i][None, :, :], dtype=tf.float32)
+
+        return (tf.reduce_sum(self._array[:, :, i * self.slice_thickness_voxels:
+                                                i * self.slice_thickness_voxels + self.slice_thickness_voxels],
+                              axis=2) * self.voxel_height)[None, :, :]
+
+    def copy(self):
+        box = np.append(self.extent, self.thickness)
+        return self.__class__(array=self._array.copy(), box=box, num_slices=self._num_slices, projected=self._projected)
+
+
+def gaussian(rgd, alpha):
+    r_g = rgd.r_g
+    g_g = 4 / np.sqrt(np.pi) * alpha ** 1.5 * np.exp(-alpha * r_g ** 2)
+    return g_g
+
+
+class Interpolator:
+    def __init__(self, gd1, gd2, dtype=float):
+        from gpaw.wavefunctions.pw import PWDescriptor
+        self.pd1 = PWDescriptor(0.0, gd1, dtype)
+        self.pd2 = PWDescriptor(0.0, gd2, dtype)
+
+    def interpolate(self, a_r):
+        return self.pd1.interpolate(a_r, self.pd2)[0]
+
+
+def potential_from_GPAW(calc, h=.05, rcgauss=0.02, spline_pts=200, n=2):
+    from gpaw.lfc import LFC
+    from gpaw.utilities import h2gpts
+    from gpaw.fftw import get_efficient_fft_size
+    from gpaw.grid_descriptor import GridDescriptor
+    from gpaw.mpi import serial_comm
+
+    v_r = calc.get_electrostatic_potential() / units.Ha
+
+    old_gd = GridDescriptor(calc.hamiltonian.finegd.N_c, calc.hamiltonian.finegd.cell_cv, comm=serial_comm)
+
+    N_c = h2gpts(h / units.Bohr, calc.wfs.gd.cell_cv)
+    N_c = np.array([get_efficient_fft_size(N, n) for N in N_c])
+    new_gd = GridDescriptor(N_c, calc.wfs.gd.cell_cv, comm=serial_comm)
+
+    interpolator = Interpolator(old_gd, new_gd)
+
+    v_r = interpolator.interpolate(v_r)
+
+    dens = calc.density
+    dens.D_asp.redistribute(dens.atom_partition.as_serial())
+    dens.Q_aL.redistribute(dens.atom_partition.as_serial())
+
+    alpha = 1 / (rcgauss / units.Bohr) ** 2
+    dv_a1 = []
+    for a, D_sp in dens.D_asp.items():
+        setup = dens.setups[a]
+        c = setup.xc_correction
+        rgd = c.rgd
+        ghat_g = gaussian(rgd, 1 / setup.rcgauss ** 2)
+        Z_g = gaussian(rgd, alpha) * setup.Z
+        D_q = np.dot(D_sp.sum(0), c.B_pqL[:, :, 0])
+        dn_g = np.dot(D_q, (c.n_qg - c.nt_qg)) * np.sqrt(4 * np.pi)
+        dn_g += 4 * np.pi * (c.nc_g - c.nct_g)
+        dn_g -= Z_g
+        dn_g -= dens.Q_aL[a][0] * ghat_g * np.sqrt(4 * np.pi)
+        dv_g = rgd.poisson(dn_g) / np.sqrt(4 * np.pi)
+        dv_g[1:] /= rgd.r_g[1:]
+        dv_g[0] = dv_g[1]
+        dv_g[-1] = 0.0
+        dv_a1.append([rgd.spline(dv_g, points=spline_pts)])
+
+    dens.D_asp.redistribute(dens.atom_partition)
+    dens.Q_aL.redistribute(dens.atom_partition)
+
+    if dv_a1:
+        dv = LFC(new_gd, dv_a1)
+        dv.set_positions(calc.spos_ac)
+        dv.add(v_r)
+    dens.gd.comm.broadcast(v_r, 0)
+
+    return ArrayPotential(array=-v_r * units.Ha, box=np.diag(calc.atoms.cell))
