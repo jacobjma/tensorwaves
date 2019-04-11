@@ -1,14 +1,14 @@
 import numpy as np
 import pytest
 from ase import Atoms
-from gpaw import GPAW, PW
-from gpaw.utilities.ps2ae import PS2AE
 
 from ..potentials import Potential
 
 
 @pytest.mark.slow
 def test_dft():
+    from gpaw import GPAW, PW
+    from gpaw.utilities.ps2ae import PS2AE
     atoms = Atoms('C', positions=[(2, 2, 2)], cell=(4, 4, 4), pbc=True)
     calc = GPAW(mode=PW(600), eigensolver='cg', gpts=(40, 40, 40), txt=None)
     atoms.set_calculator(calc)
