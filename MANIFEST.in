@@ -1,1 +1,1 @@
-#recursive-include notebooks *.traj *.h5 *.json
+recursive-include tensorwaves *.txt
