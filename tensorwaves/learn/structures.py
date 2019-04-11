@@ -1,7 +1,9 @@
-import numpy as np
 import itertools
-from scipy.spatial import Voronoi
+
+import numpy as np
 from ase import Atoms
+from scipy.spatial import Voronoi
+
 from tensorwaves.learn.augment import bandpass_noise_2d
 
 
@@ -81,7 +83,6 @@ def hexagonal2orthogonal(atoms):
     atoms.set_cell(cell)
     atoms.wrap()
     return atoms
-
 
 
 def fill_box_2d(atoms, box, rotation):

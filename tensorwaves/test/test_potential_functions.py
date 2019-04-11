@@ -6,7 +6,6 @@ from ase import units
 
 from ..potentials import LobatoPotential, KirklandPotential, log_grid
 
-tf.enable_eager_execution()
 
 
 def test_similar():

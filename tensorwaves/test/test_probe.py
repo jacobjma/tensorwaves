@@ -1,8 +1,6 @@
 import numpy as np
-from tensorwaves.waves import ProbeWaves
-import tensorflow as tf
 
-tf.enable_eager_execution()
+from tensorwaves.waves import ProbeWaves
 
 
 def test_probe():

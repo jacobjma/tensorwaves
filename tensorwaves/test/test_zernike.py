@@ -5,8 +5,6 @@ import tensorflow as tf
 from ..transfer import polar2zernike, zernike2polar
 from ..waves import PrismWaves
 
-tf.enable_eager_execution()
-
 
 @pytest.fixture
 def polar():

@@ -1,9 +1,8 @@
 import numpy as np
-import tensorflow as tf
 from ase import Atoms
 
-from ..waves import ProbeWaves, PrismWaves
 from ..detect import RingDetector
+from ..waves import ProbeWaves, PrismWaves
 
 
 def test_prism_probe():

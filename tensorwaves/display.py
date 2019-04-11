@@ -5,9 +5,10 @@ import PIL.Image
 import bqplot
 import ipywidgets
 import numpy as np
-from bqplot import LinearScale, Axis, Figure, PanZoom
 from IPython.display import display
-from tensorwaves.bases import HasData, notifying_property
+from bqplot import LinearScale, Axis, Figure, PanZoom
+
+from tensorwaves.bases import notifying_property, Observable
 from tensorwaves.plotutils import convert_complex, plot_array, plot_range
 
 
@@ -42,7 +43,7 @@ def display_slider(o, property_name, description=None, component=None, **kwargs)
     return display(slider)
 
 
-class InteractiveDisplay(HasData):
+class InteractiveDisplay(Observable):
 
     def __init__(self, showable, space='direct', mode='magnitude', auto_update=False, margin=None):
         self._showable = showable
@@ -65,7 +66,7 @@ class InteractiveDisplay(HasData):
 
         self._last_update = None
 
-        HasData.__init__(self, save_data=True)
+        Observable.__init__(self)
 
     space = notifying_property('_space')
     mode = notifying_property('_mode')
@@ -74,8 +75,11 @@ class InteractiveDisplay(HasData):
     def notify(self, observable, message):
         if self.auto_update & message['change'] & (not self._updating):
             self._updating = True
-            if observable is not self:
-                self.update_data()
+            #for observed in self._showable._observed:
+            #    observed.get_tensor()
+
+            #if observable is not self:
+            self.update_data()
             self.update()
             self._updating = False
 
@@ -158,7 +162,10 @@ class ImageDisplay(InteractiveDisplay):
         # for observed in showable._observing:
         #    observed.register_observer(self)
 
-        self._showable.register_observer(self)
+        for observed in self._showable._observed:
+            observed.register_observer(self)
+
+        #self._showable.register_observer(self)
         self.register_observer(self)
 
     color_scale = notifying_property('_color_scale')
@@ -172,19 +179,20 @@ class ImageDisplay(InteractiveDisplay):
 
     def update_data(self):
         t = time.time()
-        self._data = self._showable.get_showable_tensor()
+        self._data = self._showable.get_tensor()
+
         self._last_update = time.time() - t
 
     def update_marks(self, message=None):
         self.figure.marks[0].image = self._get_image()
 
     def update_coordinates(self, message=None):
-        x_range, y_range = plot_range(self._data.grid.extent, self._data.grid.gpts, self.space)
+        x_range, y_range = plot_range(self._data.extent, self._data.gpts, self.space)
         self.figure.marks[0].x = x_range
         self.figure.marks[0].y = y_range
 
     def update_range(self, message=None):
-        x_range, y_range = plot_range(self._data.grid.extent, self._data.grid.gpts, self.space)
+        x_range, y_range = plot_range(self._data.extent, self._data.gpts, self.space)
         self.scales['x'].min, self.scales['x'].max = map(float, x_range)
         self.scales['y'].min, self.scales['y'].max = map(float, y_range)
 

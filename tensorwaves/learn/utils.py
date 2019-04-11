@@ -2,8 +2,6 @@ import numpy as np
 import tensorflow as tf
 
 
-
-
 class TensorBoardImage(tf.keras.callbacks.Callback):
     def __init__(self, image, label=None, tag_prefix='', log_dir='./logs/images'):
         tf.keras.callbacks.Callback.__init__(self)
@@ -14,7 +12,7 @@ class TensorBoardImage(tf.keras.callbacks.Callback):
         self.label = label
 
     def on_epoch_end(self, epoch, logs=None):
-        prediction, confidence = self.model.predict((self.image, self.label))
+        prediction, confidence, _ = self.model.predict((self.image, self.label))
         prediction = np.concatenate([prediction[..., i] for i in range(prediction.shape[-1])], axis=1)[..., None]
 
         if self.label is not None:
@@ -31,3 +29,27 @@ class TensorBoardImage(tf.keras.callbacks.Callback):
             tf.summary.image('prediction', (255 * prediction).astype(np.uint8), step=epoch)
 
         writer.close()
+
+
+def nms(positions, probabilities, radius=2):
+    from sklearn.neighbors import NearestNeighbors
+    order = np.argsort(-probabilities)
+
+    positions = positions[order]
+    probabilities = probabilities[order]
+
+    nn = NearestNeighbors().fit(positions)
+    _, neighbors = nn.radius_neighbors(positions, radius=radius)
+
+    accepted = np.zeros_like(order, dtype=bool)
+    suppressed = np.zeros_like(order, dtype=bool)
+
+    for i in range(len(positions)):
+        if (not suppressed[i]):
+            order = np.argsort(probabilities[neighbors[i]])
+            n = neighbors[i][order]
+            suppressed[n] = True
+            if n[-1] == i:
+                accepted[i] = True
+
+    return positions[accepted], probabilities[accepted]

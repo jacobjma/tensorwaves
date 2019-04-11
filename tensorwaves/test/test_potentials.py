@@ -4,11 +4,6 @@ from ase import Atoms
 from ..potentials import Potential
 import pytest
 
-tf.enable_eager_execution()
-
-
-
-
 
 @pytest.fixture
 def potential():

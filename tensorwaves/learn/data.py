@@ -6,9 +6,9 @@ from ase.io import read
 from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.spatial.distance import cdist
 from skimage.transform import rescale
+from sklearn.model_selection import train_test_split
 
 from tensorwaves.bases import HasGrid, GridProperty
-from sklearn.model_selection import train_test_split
 
 
 def cluster_and_classify(atoms=None, atomic_positions=None, atomic_numbers=None, distance=1., fingerprints=None,
@@ -54,10 +54,19 @@ def cluster_positions(atomic_positions, cluster_ids, class_ids):
     return np.array(positions)[:, :2], cluster_class_ids
 
 
-def gaussian_marker_label(positions, cluster_class_ids, shape, width, depth, include_null=True):
+def gaussian_markers(positions, shape, width, cluster_class_ids=None, num_classes=None):
+    if cluster_class_ids is None:
+        cluster_class_ids = np.array([0] * len(positions))
+
+    if num_classes is None:
+        num_classes = np.max(cluster_class_ids) + 1
+
+    if isinstance(shape, int):
+        shape = (shape, shape)
+
     margin = np.int(4 * width)
     x, y = np.mgrid[0:shape[0] + 2 * margin, 0:shape[1] + 2 * margin]
-    label = np.zeros((shape[0] + 2 * margin, shape[1] + 2 * margin) + (depth,))
+    markers = np.zeros((shape[0] + 2 * margin, shape[1] + 2 * margin) + (num_classes,))
 
     for position, cluster_class_id in zip(positions, cluster_class_ids):
         x_lim_min = np.round(position[0]).astype(int)
@@ -71,21 +80,16 @@ def gaussian_marker_label(positions, cluster_class_ids, shape, width, depth, inc
         gaussian = np.exp(-cdist(position[None] + margin, np.array([x_window.ravel(),
                                                                     y_window.ravel()]).T) ** 2 / (
                                   2 * width ** 2))
-        label[x_window, y_window, cluster_class_id + 1] += gaussian.reshape(x_window.shape)
+        markers[x_window, y_window, cluster_class_id] += gaussian.reshape(x_window.shape)
 
-    label[margin:2 * margin] += label[-margin:]
-    label[-2 * margin:-margin] += label[:margin]
-    label[:, margin:2 * margin] += label[:, -margin:]
-    label[:, -2 * margin:-margin] += label[:, :margin]
+    markers[margin:2 * margin] += markers[-margin:]
+    markers[-2 * margin:-margin] += markers[:margin]
+    markers[:, margin:2 * margin] += markers[:, -margin:]
+    markers[:, -2 * margin:-margin] += markers[:, :margin]
 
-    label = label[margin:-margin, margin:-margin]
+    markers = markers[margin:-margin, margin:-margin]
 
-    if include_null:
-        label[:, :, 0] = 1 - np.sum(label, axis=2)
-
-        return label
-    else:
-        return label[..., 1:]
+    return markers
 
 
 class Sequence(tf.keras.utils.Sequence):
@@ -119,7 +123,7 @@ class Sequence(tf.keras.utils.Sequence):
             batch_images[j] = image
             batch_labels[j] = label
 
-        return (batch_images, batch_labels), (batch_labels, batch_labels)
+        return (batch_images, batch_labels), (batch_labels, batch_labels, batch_labels)
 
     def on_epoch_end(self):
         self.indices = np.arange(len(self.training_set))
@@ -203,12 +207,12 @@ def load_training_set(image_dir, atoms_dir=None):
 
 class TrainingExample(HasGrid):
 
-    def __init__(self, atoms, image):
+    def __init__(self, atoms, image, label=None):
         self._atoms = atoms
         self._image = image.reshape(image.shape[:2] + (-1,))
         self._cluster_ids = None
         self._class_ids = None
-        self._label = None
+        self._label = label
 
         extent = GridProperty(lambda: np.diag(self._atoms.get_cell())[:2], dtype=np.float32, locked=True)
         gpts = GridProperty(lambda: self._image.shape[:-1], dtype=np.int32, locked=True)
@@ -236,12 +240,10 @@ class TrainingExample(HasGrid):
                 try:
                     image, label = augmentation.apply_image_and_label(image, label)
                 except AttributeError:
-                    pass
-
-                try:
-                    image = augmentation.apply_image(image)
-                except AttributeError:
-                    pass
+                    try:
+                        image = augmentation.apply_image(image)
+                    except AttributeError:
+                        raise
 
         return image[None], label[None]
 
@@ -273,38 +275,6 @@ class TrainingExample(HasGrid):
         self._label = gaussian_marker_label(positions / self.sampling, cluster_class_ids, self.gpts, gaussian_width,
                                             depth,
                                             include_null=include_null)
-
-        #
-        # gaussian_width = gaussian_width / np.mean(self.sampling)
-        #
-        # margin = np.int(4 * gaussian_width)
-        # x, y = np.mgrid[0:self.gpts[0] + 2 * margin, 0:self.gpts[1] + 2 * margin]
-        # self._label = np.zeros((self.gpts[0] + 2 * margin, self.gpts[1] + 2 * margin) + (depth,))
-        #
-        # for position, cluster_class_id in zip(*cluster_positions(self._atoms, self._cluster_ids, self._class_ids)):
-        #     position /= self.sampling
-        #
-        #     x_lim_min = np.round(position[0]).astype(int)
-        #     x_lim_max = np.round(position[0] + 2 * margin + 1).astype(int)
-        #     y_lim_min = np.round(position[1]).astype(int)
-        #     y_lim_max = np.round(position[1] + 2 * margin + 1).astype(int)
-        #
-        #     x_window = x[x_lim_min: x_lim_max, y_lim_min: y_lim_max]
-        #     y_window = y[x_lim_min: x_lim_max, y_lim_min: y_lim_max]
-        #
-        #     gaussian = np.exp(-cdist(position[None] + margin, np.array([x_window.ravel(),
-        #                                                                 y_window.ravel()]).T) ** 2 / (
-        #                               2 * gaussian_width ** 2))
-        #     self._label[x_window, y_window, cluster_class_id + 1] += gaussian.reshape(x_window.shape)
-        #
-        # self._label[margin:2 * margin] += self._label[-margin:]
-        # self._label[-2 * margin:-margin] += self._label[:margin]
-        # self._label[:, margin:2 * margin] += self._label[:, -margin:]
-        # self._label[:, -2 * margin:-margin] += self._label[:, :margin]
-        #
-        # self._label = self._label[margin:-margin, margin:-margin]
-        #
-        # self._label[:, :, 0] = 1 - np.sum(self._label, axis=2)
 
     def show_clusters(self):
         import matplotlib.pyplot as plt

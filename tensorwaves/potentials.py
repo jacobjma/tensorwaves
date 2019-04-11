@@ -360,6 +360,10 @@ class Potential(HasGrid, TensorFactory):
         return (self.current_slice + 1) * self.slice_thickness
 
     def set_atoms(self, atoms, origin=None, extent=None):
+
+        if atoms.cell[2, 2] == 0.:
+            raise RuntimeError('atoms has no thickness')
+
         self._atoms = atoms
         self._species = list(np.unique(self.atoms.get_atomic_numbers()))
         self.new_view(origin=origin, extent=extent)
@@ -438,6 +442,9 @@ class Potential(HasGrid, TensorFactory):
             self.current_slice = i
             yield self._calculate_tensor()
 
+    def get_slice(self):
+        return self.get_tensor()
+
     def get_tensor(self):
         return Tensor(self._calculate_tensor(), extent=self.extent, space='direct')
 
@@ -504,6 +511,9 @@ class Potential(HasGrid, TensorFactory):
         v = tf.slice(v, (margin, margin), self.gpts)
 
         return v[None, :, :] / kappa
+
+    def show(self, **kwargs):
+        self.get_tensor().show(**kwargs)
 
     def show_atoms(self, plane='xy', scale=100, margin=True, fig_scale=1):
 

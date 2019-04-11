@@ -1,6 +1,7 @@
 import numpy as np
 import tensorflow as tf
 from ase import units
+from tensorwaves.plotutils import show_array
 
 
 def named_property(name):
@@ -566,8 +567,9 @@ class Tensor(HasGrid):
         new_tensor._grid = self._grid.copy()
         return new_tensor
 
-    def show(self, i):
-        pass
+    def show(self, i=0, fig_scale=1, display_space='direct', scale='linear'):
+        show_array(self._tensorflow.numpy(), self.extent, self.space, fig_scale=fig_scale, display_space=display_space,
+                   scale=scale)
 
 
 class TensorWithEnergy(Tensor, HasEnergy, HasGridAndEnergy):

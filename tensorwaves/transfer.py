@@ -634,6 +634,7 @@ class Translate(FrequencyTransfer):
         self.notify_observers({'name': '_positions', 'old': old, 'new': positions, 'change': change})
 
     def _calculate_tensor(self, kx=None, ky=None):
+
         if (kx is None) | (ky is None):
             kx, ky = self.fftfreq()
             tensor = complex_exponential(2 * np.pi * (kx[None, :, None] * self.positions[:, 0][:, None, None] +
@@ -667,6 +668,7 @@ class CTF(FrequencyTransfer):
         self._temporal_envelope._energy = self._energy
 
         self._aberrations.register_observer(self)
+        self._aberrations.parametrization.register_observer(self)
         self._aperture.register_observer(self)
         self._temporal_envelope.register_observer(self)
         self._energy.register_observer(self)

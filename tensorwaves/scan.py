@@ -1,21 +1,26 @@
-from collections import Iterable, OrderedDict
+from collections import Iterable
+from collections import OrderedDict
 from numbers import Number
 
 import numpy as np
 import tensorflow as tf
 
-from tensorwaves.image import Image
+from tensorwaves.bases import Tensor
 from tensorwaves.utils import batch_generator, ProgressBar
 
 
 class Scan(object):
 
-    def __init__(self, scanable=None, detectors=None):
+    def __init__(self, scanable=None, detectors=None, ):
         self._scanable = scanable
         if detectors is None:
-            self._detectors = ()
+            self._detectors = []
         else:
-            self._detectors = detectors
+
+            if not isinstance(detectors, Iterable):
+                self._detectors = [detectors]
+            else:
+                self._detectors = detectors
 
         self._data = None
 
@@ -183,6 +188,16 @@ class GridScan(Scan):
         y, x = np.meshgrid(y, x)
 
         return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
+
+    def image(self, detector=None):
+        if detector is None:
+            detector = next(iter(self._data.keys()))
+
+        tensor = tf.reshape(tf.concat(self._data[detector], 0), self._num_positions)
+
+        return Tensor(tensor[None], extent=self._end-self._start)
+
+    #def show(self):
 
     def numpy(self, detector=None):
         if detector is None:

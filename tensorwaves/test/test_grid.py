@@ -8,8 +8,6 @@ from ..potentials import Potential
 from ..waves import WaveFactory, PlaneWaves, ProbeWaves, PrismWaves
 from .test_utils import CallCounter
 
-tf.enable_eager_execution()
-
 
 def test_linspace_no_endpoint():
     assert np.all(np.isclose(linspace_no_endpoint(0., 9, 8), np.linspace(0., 9, 8, endpoint=False, dtype=np.float32)))
@@ -141,8 +139,8 @@ def test_grid_update(tensorfactory_with_grid):
     instance.get_tensor()
     assert counter.n == 2
 
-    #instance = tensorfactory_with_grid()
-    #with pytest.raises(RuntimeError) as exc_info:
+    # instance = tensorfactory_with_grid()
+    # with pytest.raises(RuntimeError) as exc_info:
     #    instance.get_tensor()
     #
-    #assert str(exc_info.value) == 'grid is not defined'
+    # assert str(exc_info.value) == 'grid is not defined'

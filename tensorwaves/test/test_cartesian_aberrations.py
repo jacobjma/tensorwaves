@@ -3,8 +3,6 @@ import tensorflow as tf
 import pytest
 from tensorwaves.transfer import PhaseAberration, polar2cartesian, cartesian2polar
 
-tf.enable_eager_execution()
-
 
 @pytest.fixture
 def polar():

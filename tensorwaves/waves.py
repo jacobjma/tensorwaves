@@ -1,3 +1,4 @@
+from collections import Iterable
 from collections import OrderedDict
 
 import numpy as np
@@ -107,7 +108,23 @@ class WaveFactory(HasGridAndEnergy, HasGrid, HasEnergy, TensorFactory):
 
         self.match(potential)
 
+        # waves =
+
         return self.get_tensor().multislice(potential, in_place=in_place)
+
+    def match(self, other, override=True):
+
+        if override:
+            if other.extent is not None:
+                self.extent = None
+
+            if other.sampling is not None:
+                self.sampling = None
+
+            if other.gpts is not None:
+                self.gpts = None
+
+        HasGridAndEnergy.match(self, other)
 
 
 class PlaneWaves(WaveFactory):
@@ -148,13 +165,17 @@ class ProbeWaves(WaveFactory):
         self.translate._grid = self._grid
         self.translate._energy = self._energy
 
-        self.ctf.register_observer(self)
+        self.ctf.aberrations.parametrization.register_observer(self)
         self.ctf.aberrations.register_observer(self)
+        self.ctf.register_observer(self)
         self.ctf.aperture.register_observer(self)
         self.ctf.temporal_envelope.register_observer(self)
         self.translate.register_observer(self)
         self._grid.register_observer(self)
         self._energy.register_observer(self)
+
+        self._observed = [self.ctf.aperture, self.ctf.aberrations.parametrization, self.ctf.aberrations, self.ctf,
+                          self.translate, self._grid, self._energy]
 
     @property
     def ctf(self):
@@ -192,8 +213,8 @@ class ProbeWaves(WaveFactory):
         scan.scan(max_batch=max_batch, potential=potential)
         return scan
 
-    def gridscan(self, start=None, end=None, num_positions=None, sampling=None, endpoint=False, max_batch=1,
-                 potential=None, detectors=None):
+    def gridscan(self, potential, max_batch, start=None, end=None, num_positions=None, sampling=None, endpoint=False,
+                 detectors=None):
         scan = GridScan(scanable=self, detectors=detectors, start=start, end=end, num_positions=num_positions,
                         sampling=sampling, endpoint=endpoint)
 
@@ -282,6 +303,9 @@ class ScatteringMatrix(TensorWaves, TensorFactory):
         self._aberrations._parametrization.register_observer(self)
         self._aperture.register_observer(self)
 
+        self._observed = [self._aberrations.parametrization, self._aberrations, self._aperture,
+                          self._translate, self._grid, self._energy]
+
     @property
     def kx(self):
         return self._kx
@@ -333,25 +357,20 @@ class ScatteringMatrix(TensorWaves, TensorFactory):
     def get_probe(self):
         return self.get_tensor()
 
-    def scan(self, scan, detectors=None, tracker=None):
+    def scan(self, scan, detectors, tracker=None):
 
-        if detectors:
-            scan._data = OrderedDict(zip(detectors, [[]] * len(detectors)))
+        if not isinstance(detectors, Iterable):
+            detectors = [detectors]
 
-        else:
-            scan._data = []
+        scan._data = OrderedDict(zip(detectors, [[]] * len(detectors)))
 
         for i, position in enumerate(scan.generate_positions(1)):
             self.position = position[0]
 
             tensor = self.get_tensor()
 
-            if detectors:
-                for detector, detections in scan._data.items():
-                    detections.append(detector.detect(tensor))
-
-            else:
-                scan._data.append(tensor)
+            for detector, detections in scan._data.items():
+                detections.append(detector.detect(tensor))
 
         return scan
 

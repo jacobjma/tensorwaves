@@ -6,8 +6,6 @@ from mock import Mock
 
 from ..potentials import Potential, PotentialParameterization
 
-tf.enable_eager_execution()
-
 
 @pytest.fixture
 def mock_parameterization():

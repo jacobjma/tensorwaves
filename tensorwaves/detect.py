@@ -1,9 +1,9 @@
 import numpy as np
 import tensorflow as tf
 
-from tensorwaves.bases import TensorFactory, HasGrid, HasEnergy, notifying_property
-from tensorwaves.transfer import squared_norm
+from tensorwaves.bases import TensorFactory, HasGrid, HasEnergy, notifying_property, TensorWithEnergy
 from tensorwaves.image import Image
+from tensorwaves.transfer import squared_norm
 
 
 class Detector(HasGrid):
@@ -78,7 +78,7 @@ class RingDetector(DetectorWithEnergy, TensorFactory):
         else:
             tensor = tf.cast((alpha > self._inner) & (alpha < self._outer), tf.float32)
 
-        return tensor
+        return TensorWithEnergy(tensor[None], extent=self.extent, energy=self.energy, space='fourier')
 
     def detect(self, wave):
         self.match(wave)
@@ -86,6 +86,6 @@ class RingDetector(DetectorWithEnergy, TensorFactory):
         intensity = tf.abs(tf.signal.fft2d(wave.tensorflow())) ** 2
 
         if self._integrate:
-            return tf.reduce_sum(intensity * self.get_tensor(), axis=(1, 2)) / tf.reduce_sum(intensity, axis=(1, 2))
+            return tf.reduce_sum(intensity * self.get_tensor().tensorflow(), axis=(1, 2)) / tf.reduce_sum(intensity, axis=(1, 2))
         else:
             return Image(intensity, extent=wave.grid.extent)
