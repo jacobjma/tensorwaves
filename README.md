@@ -18,5 +18,6 @@ Optional:
 ## Install
 ```
 $ git clone https://github.com/jacobjma/tensorwaves.git
+$ cd tensorwaves
 $ pip install .
 ```
