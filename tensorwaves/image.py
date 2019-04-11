@@ -31,5 +31,5 @@ class Image(Tensor):
     # def clip(self, min=0., max=np.inf):
     #     self._tensor = tf.clip_by_value(self._tensor, clip_value_min=min, clip_value_max=max)
 
-    def save(self, path):
-        np.savez(file=path, tensor=self._tensor.numpy(), extent=self.extent, space=self.space)
+    #def save(self, path):
+    #    np.savez(file=path, tensor=self._tensor.numpy(), extent=self.extent, space=self.space)

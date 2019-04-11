@@ -354,8 +354,11 @@ class ScatteringMatrix(TensorWaves, TensorFactory):
     def k_max(self):
         return tf.reduce_max((tf.reduce_max(self._kx), tf.reduce_max(self._ky)))
 
+    def get_tensor(self):
+        return TensorFactory.get_tensor(self)
+
     def get_probe(self):
-        return self.get_tensor()
+        return TensorFactory.get_tensor(self)
 
     def scan(self, scan, detectors, tracker=None):
 

@@ -163,9 +163,6 @@ class ImageDisplay(InteractiveDisplay):
 
         self._scale_adjustment = 1
 
-        # for observed in displayable._observing:
-        #    observed.register_observer(self)
-
         for observed in self._displayable._observing:
             observed.register_observer(self)
 
