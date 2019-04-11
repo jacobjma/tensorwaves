@@ -571,7 +571,7 @@ class PhaseAberration(FrequencyTransfer):
     def parametrization(self):
         return self._parametrization
 
-    def _line_data(self, phi, k_max=2, n=1024):
+    def line_data(self, phi, k_max=2, n=1024):
         k = tf.linspace(0., k_max, n)
         alpha = self.wavelength * k
         tensor = self.parametrization(alpha=alpha, alpha2=alpha ** 2, phi=phi)

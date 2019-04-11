@@ -33,8 +33,8 @@ def link_widget_component(widget, o, property_name, component):
 def display_slider(o, property_name, description=None, component=None, **kwargs):
     if description is None:
         description = property_name
-
-    slider = ipywidgets.FloatSlider(description=description, **kwargs)
+    value = getattr(o, property_name)
+    slider = ipywidgets.FloatSlider(description=description, value=value, **kwargs)
 
     if component is None:
         link_widget(slider, o, property_name)
@@ -75,10 +75,10 @@ class InteractiveDisplay(Observable):
     def notify(self, observable, message):
         if self.auto_update & message['change'] & (not self._updating):
             self._updating = True
-            #for observed in self._showable._observed:
+            # for observed in self._showable._observed:
             #    observed.get_tensor()
 
-            #if observable is not self:
+            # if observable is not self:
             self.update_data()
             self.update()
             self._updating = False
@@ -165,7 +165,7 @@ class ImageDisplay(InteractiveDisplay):
         for observed in self._showable._observed:
             observed.register_observer(self)
 
-        #self._showable.register_observer(self)
+        # self._showable.register_observer(self)
         self.register_observer(self)
 
     color_scale = notifying_property('_color_scale')
