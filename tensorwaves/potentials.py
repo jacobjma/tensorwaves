@@ -84,7 +84,6 @@ class PotentialParameterization(object):
         raise RuntimeError()
 
     def _find_cutoff(self, atomic_number):
-        # print(self.get_function(atomic_number))
         return np.float32(brentq(lambda x: (self.get_function(atomic_number)(x)) - self.tolerance, 1e-7, 1000))
 
     def get_cutoff(self, atomic_number):

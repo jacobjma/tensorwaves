@@ -18,6 +18,7 @@ class TensorWaves(TensorWithEnergy):
 
     def __init__(self, tensor, extent=None, sampling=None, energy=None):
         TensorWithEnergy.__init__(self, tensor, extent=extent, sampling=sampling, energy=energy, space='direct')
+        self._observing = []
 
     def multislice(self, potential, in_place=False, progress_tracker=None):
 
@@ -83,6 +84,9 @@ class TensorWaves(TensorWithEnergy):
     def intensity(self):
         return tf.abs(self._tensorflow) ** 2
 
+    def get_tensor(self):
+        return self
+
     def image(self):
         from tensorwaves.image import Image
         return Image(self.intensity(), extent=self.extent.copy())
@@ -99,8 +103,8 @@ class WaveFactory(HasGridAndEnergy, HasGrid, HasEnergy, TensorFactory):
         HasEnergy.__init__(self, energy=energy)
         TensorFactory.__init__(self, save_tensor=save_tensor)
 
-        self._grid.register_observer(self)
-        self._energy.register_observer(self)
+        self.observe(self._grid)
+        self.observe(self._energy)
 
     def multislice(self, potential, in_place=False):
         if isinstance(potential, Atoms):
@@ -165,17 +169,14 @@ class ProbeWaves(WaveFactory):
         self.translate._grid = self._grid
         self.translate._energy = self._energy
 
-        self.ctf.aberrations.parametrization.register_observer(self)
-        self.ctf.aberrations.register_observer(self)
-        self.ctf.register_observer(self)
-        self.ctf.aperture.register_observer(self)
-        self.ctf.temporal_envelope.register_observer(self)
-        self.translate.register_observer(self)
-        self._grid.register_observer(self)
-        self._energy.register_observer(self)
-
-        self._observed = [self.ctf.aperture, self.ctf.aberrations.parametrization, self.ctf.aberrations, self.ctf,
-                          self.translate, self._grid, self._energy]
+        self.observe(self.ctf.aberrations.parametrization)
+        self.observe(self.ctf.aberrations)
+        self.observe(self.ctf)
+        self.observe(self.ctf.aperture)
+        self.observe(self.ctf.temporal_envelope)
+        self.observe(self.translate)
+        self.observe(self._grid)
+        self.observe(self._energy)
 
     @property
     def ctf(self):
@@ -298,13 +299,12 @@ class ScatteringMatrix(TensorWaves, TensorFactory):
         self._aperture = PrismAperture(kx=kx, ky=ky, radius=np.inf)
         self._aperture._energy = self._energy
 
-        self._translate.register_observer(self)
-        self._aberrations.register_observer(self)
-        self._aberrations._parametrization.register_observer(self)
-        self._aperture.register_observer(self)
-
-        self._observed = [self._aberrations.parametrization, self._aberrations, self._aperture,
-                          self._translate, self._grid, self._energy]
+        self.observe(self.translate)
+        self.observe(self.aberrations)
+        self.observe(self.aberrations.parametrization)
+        self.observe(self.aperture)
+        self.observe(self._grid)
+        self.observe(self._energy)
 
     @property
     def kx(self):

@@ -5,8 +5,15 @@ import tensorflow as tf
 
 from tensorwaves.bases import TensorWithEnergy, Tensor, notifying_property, Observable, HasGrid, HasEnergy, \
     HasGridAndEnergy, TensorFactory, Grid, EnergyProperty
-from tensorwaves.ops import squared_norm, angle
 from tensorwaves.utils import complex_exponential
+
+
+def squared_norm(x, y):
+    return x[:, None] ** 2 + y[None, :] ** 2
+
+
+def angle(x, y):
+    return tf.atan2(x[:, None], y[None, :])
 
 
 class FrequencyTransfer(HasGrid, HasEnergy, HasGridAndEnergy, TensorFactory, Observable):
@@ -18,9 +25,12 @@ class FrequencyTransfer(HasGrid, HasEnergy, HasGridAndEnergy, TensorFactory, Obs
         TensorFactory.__init__(self, save_tensor=save_tensor)
         Observable.__init__(self)
 
-        self._grid.register_observer(self)
-        self._energy.register_observer(self)
-        self.register_observer(self)
+        self.observe(self)
+        self.observe(self._grid)
+        self.observe(self._energy)
+
+    def apply(self, waves):
+        return waves.apply_frequency_transfer(self)
 
 
 class Aperture(FrequencyTransfer):
@@ -66,17 +76,27 @@ class TemporalEnvelope(FrequencyTransfer):
 
     focal_spread = notifying_property('_focal_spread')
 
+    def _function(self, alpha):
+        return tf.exp(- (.5 * np.pi / self.wavelength * self.focal_spread * alpha ** 2) ** 2)
+
     def _calculate_tensor(self, alpha=None):
         if alpha is None:
             alpha = tf.sqrt(squared_norm(*self.semiangles()))
 
         if self.focal_spread > 0.:
-            tensor = tf.exp(- (.5 * np.pi / self.wavelength * self.focal_spread * alpha ** 2) ** 2)
+            tensor = self._function(alpha)
         else:
             tensor = tf.ones(alpha.shape)
 
         return TensorWithEnergy(tf.cast(tensor[None, :, :], tf.complex64), extent=self.extent, space='fourier',
                                 energy=self.energy)
+
+    def line_data(self, k_max=2, n=1024):
+        k = tf.linspace(0., k_max, n)
+        alpha = self.wavelength * k
+        tensor = self._function(alpha)
+
+        return k, tensor
 
 
 class Parametrization(Observable):
@@ -562,7 +582,7 @@ class PhaseAberration(FrequencyTransfer):
         FrequencyTransfer.__init__(self, extent=extent, gpts=gpts, sampling=sampling, energy=energy,
                                    save_tensor=save_tensor)
 
-        self._parametrization.register_observer(self)
+        self.observe(self._parametrization)
 
     def set_paramters(self, parameters):
         self._parametrization.set_parameters(parameters)
@@ -667,12 +687,17 @@ class CTF(FrequencyTransfer):
         self._temporal_envelope._grid = self._grid
         self._temporal_envelope._energy = self._energy
 
-        self._aberrations.register_observer(self)
-        self._aberrations.parametrization.register_observer(self)
-        self._aperture.register_observer(self)
-        self._temporal_envelope.register_observer(self)
-        self._energy.register_observer(self)
-        self._grid.register_observer(self)
+        self.observe(self._aberrations)
+        self.observe(self._aberrations.parametrization)
+        self.observe(self._aperture)
+        self.observe(self._temporal_envelope)
+        self.observe(self._energy)
+        self.observe(self._grid)
+
+    def line_data(self, phi, k_max=2, n=1024):
+        k, tensor = self.aberrations.line_data(phi=phi, k_max=k_max, n=n)
+        tensor *= tf.cast(self.temporal_envelope.line_data(k_max=k_max, n=n)[1], tf.complex64)
+        return k, tensor
 
     @property
     def aberrations(self):
@@ -692,8 +717,6 @@ class CTF(FrequencyTransfer):
             alpha2 = squared_norm(alpha_x, alpha_y)
             alpha = tf.sqrt(alpha2)
             phi = angle(alpha_x, alpha_y)
-
-        # print(self.aberrations.defocus)
 
         tensor = self.aberrations._calculate_tensor(alpha, alpha2, phi).tensorflow()
 

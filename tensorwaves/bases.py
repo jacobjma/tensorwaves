@@ -42,7 +42,8 @@ class Observable(object):
         self._observers = []
 
     def register_observer(self, observer):
-        self._observers.append(observer)
+        if observer not in self._observers:
+            self._observers.append(observer)
 
     def notify_observers(self, message):
         for observer in self._observers:
@@ -51,8 +52,15 @@ class Observable(object):
 
 class Observer(object):
     def __init__(self, observable=None):
+        self._observing = []
+
         if observable:
-            observable.register_observer(self)
+            self.observe(observable)
+
+    def observe(self, observable):
+        observable.register_observer(self)
+        if observable not in self._observing:
+            self._observing.append(observable)
 
     def notify(self, observable, message):
         raise NotImplementedError()

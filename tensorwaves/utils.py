@@ -24,7 +24,7 @@ def batch_generator(n_items, max_batch_size):
 
 def log_grid(start, stop, n):
     dt = tf.log(stop / start) / (n - 1)
-    return start * tf.exp(dt * tf.lin_space(0., n - 1, n))
+    return start * tf.exp(dt * tf.linspace(0., n - 1, n))
 
 
 def complex_exponential(x):

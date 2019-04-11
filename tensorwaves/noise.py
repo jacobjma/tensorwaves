@@ -1,34 +1,22 @@
 import numpy as np
 
-from tensorwaves.bases import fftfreq
-#import tensorflow
 
-def spectral_noise(gpts, sampling, func):
-    kx = np.fft.fftfreq(gpts[0], sampling[0])
-    ky = np.fft.fftfreq(gpts[1], sampling[1])
-    k = np.sqrt(kx[:, None] ** 2 + ky[None, :] ** 2)
-
-    abs_F = func(k)
-    abs_F[abs_F < 0] = 0
-    abs_F = np.sqrt(abs_F)
-
-    v = np.random.rand(abs_F.shape[0], abs_F.shape[1])
-
-    F = abs_F * np.exp(-1.j * 2 * np.pi * v)
-
-    return (np.fft.ifft2(F).real + np.fft.ifft2(F).imag) / 2
+def bandpass_noise(inner, outer, n):
+    k = np.fft.fftfreq(n)
+    inner = inner / n
+    outer = outer / n
+    mask = (k > inner) & (k < outer)
+    noise = np.fft.ifft(mask * np.exp(-1.j * 2 * np.pi * np.random.rand(*k.shape)))
+    noise = (noise.real + noise.imag) / 2
+    return noise / np.std(noise)
 
 
-def power_law_noise(gpts, sampling, power):
-    def fit_func(k):
-        ret_vals = np.zeros_like(k)
-        ret_vals[k != 0] = k[k != 0] ** power
-        return ret_vals
-
-    noise = spectral_noise(gpts, sampling, fit_func)
-
-    # import matplotlib.pyplot as plt
-    # plt.imshow(noise)
-    # plt.show()
-
-    return noise
+def bandpass_noise_2d(inner, outer, shape):
+    kx, ky = np.meshgrid(np.fft.fftfreq(shape[0]), np.fft.fftfreq(shape[1]))
+    k = np.sqrt(kx ** 2 + ky ** 2)
+    inner = inner / np.max(shape)
+    outer = outer / np.max(shape)
+    mask = (k > inner) & (k < outer)
+    noise = np.fft.ifft2(mask * np.exp(-1.j * 2 * np.pi * np.random.rand(*k.shape)))
+    noise = (noise.real + noise.imag) / 2
+    return noise / np.std(noise)

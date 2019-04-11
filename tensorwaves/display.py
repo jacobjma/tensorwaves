@@ -34,6 +34,10 @@ def display_slider(o, property_name, description=None, component=None, **kwargs)
     if description is None:
         description = property_name
     value = getattr(o, property_name)
+
+    if component is not None:
+        value = value[component]
+
     slider = ipywidgets.FloatSlider(description=description, value=value, **kwargs)
 
     if component is None:
@@ -45,8 +49,12 @@ def display_slider(o, property_name, description=None, component=None, **kwargs)
 
 class InteractiveDisplay(Observable):
 
-    def __init__(self, showable, space='direct', mode='magnitude', auto_update=False, margin=None):
-        self._showable = showable
+    def __init__(self, displayable, modifications=None, space='direct', mode='magnitude', auto_update=False,
+                 margin=None):
+        self._displayable = displayable
+
+        self._modifications = modifications
+
         self._space = space
         self._mode = mode
         self._auto_update = auto_update
@@ -75,10 +83,6 @@ class InteractiveDisplay(Observable):
     def notify(self, observable, message):
         if self.auto_update & message['change'] & (not self._updating):
             self._updating = True
-            # for observed in self._showable._observed:
-            #    observed.get_tensor()
-
-            # if observable is not self:
             self.update_data()
             self.update()
             self._updating = False
@@ -107,9 +111,9 @@ class InteractiveDisplay(Observable):
 
 class LineDisplay(InteractiveDisplay):
 
-    def __init__(self, showable, space='direct', mode='magnitude', color_scale='linear', auto_update=True,
+    def __init__(self, displayable, space='direct', mode='magnitude', color_scale='linear', auto_update=True,
                  margin=None):
-        InteractiveDisplay.__init__(self, showable=showable, space=space, auto_update=auto_update, margin=margin,
+        InteractiveDisplay.__init__(self, displayable=displayable, space=space, auto_update=auto_update, margin=margin,
                                     mode=mode)
 
         self.update_data()
@@ -120,14 +124,14 @@ class LineDisplay(InteractiveDisplay):
             marks += [bqplot.Lines(x=x.numpy(), y=np.imag(y.numpy()), scales=self.scales)]
         self.figure.marks = marks
 
-        for s in self._showable:
+        for s in self._displayable:
             s.register_observer(self)
         self.register_observer(self)
 
     def update_data(self):
         self._data = {}
-        for showable in self._showable:
-            self._data[showable] = showable._line_data(phi=0)
+        for displayable in self._displayable:
+            self._data[displayable] = displayable._line_data(phi=0)
 
     def update_marks(self):
 
@@ -146,10 +150,10 @@ class LineDisplay(InteractiveDisplay):
 
 class ImageDisplay(InteractiveDisplay):
 
-    def __init__(self, showable, space='direct', mode='magnitude', color_scale='linear', auto_update=False,
-                 margin=None):
-        InteractiveDisplay.__init__(self, showable=showable, space=space, auto_update=auto_update, margin=margin,
-                                    mode=mode)
+    def __init__(self, displayable, modifications=None, space='direct', mode='magnitude', color_scale='linear',
+                 auto_update=False, margin=None):
+        InteractiveDisplay.__init__(self, displayable=displayable, modifications=modifications, space=space,
+                                    auto_update=auto_update, margin=margin, mode=mode)
         self._color_scale = color_scale
         self.update_data()
 
@@ -159,13 +163,18 @@ class ImageDisplay(InteractiveDisplay):
 
         self._scale_adjustment = 1
 
-        # for observed in showable._observing:
+        # for observed in displayable._observing:
         #    observed.register_observer(self)
 
-        for observed in self._showable._observed:
+        for observed in self._displayable._observing:
             observed.register_observer(self)
 
-        # self._showable.register_observer(self)
+        if self._modifications is not None:
+            for modification in modifications:
+                modification.register_observer(self)
+                for observed in modification._observing:
+                    observed.register_observer(self)
+
         self.register_observer(self)
 
     color_scale = notifying_property('_color_scale')
@@ -179,7 +188,11 @@ class ImageDisplay(InteractiveDisplay):
 
     def update_data(self):
         t = time.time()
-        self._data = self._showable.get_tensor()
+        self._data = self._displayable.get_tensor()
+
+        if self._modifications:
+            for modification in self._modifications:
+                self._data = modification.apply(self._data)
 
         self._last_update = time.time() - t
 
