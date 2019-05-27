@@ -16,6 +16,11 @@ Optional:
 * [bqplot](https://github.com/bloomberg/bqplot) (Interactive plotting)
 
 ## Install
+Install dependencies
+```
+$ pip install tensorflow==2.0.0-alpha0 numpy scipy matplotlib ase
+```
+Install from repository
 ```
 $ git clone https://github.com/jacobjma/tensorwaves.git
 $ cd tensorwaves
