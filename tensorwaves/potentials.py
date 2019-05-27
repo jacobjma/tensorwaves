@@ -6,9 +6,9 @@ import tensorflow as tf
 from ase import units
 from scipy.optimize import brentq
 
-from tensorwaves.bases import Tensor, TensorFactory, HasGrid, GridProperty
+from tensorwaves.bases import TensorWithGrid, TensorFactory, HasGrid, GridProperty
 from tensorwaves.interpolate_spline import interpolate_spline
-from tensorwaves.utils import batch_generator
+from tensorwaves.utils import batch_generator, complex_exponential
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 kappa = 4 * np.pi * eps0 / (2 * np.pi * units.Bohr * units._e * units.C)
@@ -121,6 +121,19 @@ class LobatoPotential(PotentialParameterization):
         b = [2 * np.pi / tf.sqrt(self.parameters[atomic_number][key]) for key in ('b1', 'b2', 'b3', 'b4', 'b5')]
 
         return (tf.cast(x, dtype=tf.float32) for x in (a, b))
+
+    def _create_scattering_factor(self, atomic_number):
+        a = [self.parameters[atomic_number][key_a] for key_a in ('a1', 'a2', 'a3', 'a4', 'a5')]
+        b = [self.parameters[atomic_number][key_b] for key_b in ('b1', 'b2', 'b3', 'b4', 'b5')]
+
+        def func(k2):
+            return ((a[0] * (2. + b[0] * k2) / (1. + b[0] * k2) ** 2) +
+                    (a[1] * (2. + b[1] * k2) / (1. + b[1] * k2) ** 2) +
+                    (a[2] * (2. + b[2] * k2) / (1. + b[2] * k2) ** 2) +
+                    (a[3] * (2. + b[3] * k2) / (1. + b[3] * k2) ** 2) +
+                    (a[4] * (2. + b[4] * k2) / (1. + b[4] * k2) ** 2))
+
+        return func
 
     def _create_function(self, atomic_number):
         a, b = self._convert_coefficients(atomic_number)
@@ -271,8 +284,8 @@ class Potential(HasGrid, TensorFactory):
                  num_slices=None, parametrization='lobato', periodic=True, method='splines', atoms_per_loop=10,
                  tolerance=1e-2, num_nodes=50, save_tensor=True):
 
-        HasGrid.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
         TensorFactory.__init__(self, save_tensor=save_tensor)
+        HasGrid.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
 
         self._atoms = None
         self._species = None
@@ -308,7 +321,7 @@ class Potential(HasGrid, TensorFactory):
         if periodic is False:
             raise NotImplementedError()
 
-        if method != 'splines':
+        if method not in ('splines', 'fourier'):
             raise NotImplementedError()
 
     @property
@@ -330,6 +343,10 @@ class Potential(HasGrid, TensorFactory):
     @property
     def parametrization(self):
         return self._parametrization
+
+    @property
+    def method(self):
+        return self._method
 
     @property
     def num_slices(self):
@@ -360,8 +377,14 @@ class Potential(HasGrid, TensorFactory):
 
     def set_atoms(self, atoms, origin=None, extent=None):
 
-        if atoms.cell[2, 2] == 0.:
+        if np.abs(atoms.cell[0, 0]) < 1e-12:
             raise RuntimeError('atoms has no thickness')
+
+        if (np.abs(atoms.cell[0, 0]) < 1e-12) | (np.abs(atoms.cell[1, 1]) < 1e-12):
+            raise RuntimeError('atoms has no width')
+
+        if np.any(np.abs(atoms.cell[~np.eye(3, dtype=bool)]) > 1e-12):
+            raise RuntimeError('non-diagonal unit cell not supported')
 
         self._atoms = atoms
         self._species = list(np.unique(self.atoms.get_atomic_numbers()))
@@ -417,7 +440,12 @@ class Potential(HasGrid, TensorFactory):
 
         positions = self.atoms.get_positions()[np.where(self.atoms.get_atomic_numbers() == atomic_number)[0]]
         positions[:, :2] = (positions[:, :2] - self.origin) % np.diag(self.atoms.get_cell())[:2]
-        cutoff = self.parametrization.get_cutoff(atomic_number)
+
+        if self.method == 'fourier':
+            cutoff = 0.
+
+        else:
+            cutoff = self.parametrization.get_cutoff(atomic_number)
 
         positions = add_margin(positions, np.diag(self.atoms.get_cell())[:2], self.extent, cutoff)
 
@@ -430,7 +458,7 @@ class Potential(HasGrid, TensorFactory):
         cutoffs = [self.parametrization.get_cutoff(atomic_number) for atomic_number in self._species]
         return max(cutoffs)
 
-    def get_positions_in_slice(self, atomic_number):
+    def get_positions_in_slice(self, atomic_number, margin=True):
         positions = self.get_positions(atomic_number)
         cutoff = self.parametrization.get_cutoff(atomic_number)
         return positions[np.abs(self.slice_entrance + self.slice_thickness / 2 - positions[:, 2]) < (
@@ -441,13 +469,32 @@ class Potential(HasGrid, TensorFactory):
             self.current_slice = i
             yield self._calculate_tensor()
 
-    def get_slice(self):
-        return self.get_tensor()
+    # def build(self):
+    #
 
-    def get_tensor(self):
-        return Tensor(self._calculate_tensor(), extent=self.extent, space='direct')
+    def _evaluate_fourier(self):
 
-    def _calculate_tensor(self):
+        kx, ky = self.fftfreq()
+        margin = (self.get_margin() / min(self.sampling)).astype(np.int32)
+        padded_gpts = self.gpts  # + 2 * margin
+        v = tf.Variable(tf.zeros((padded_gpts[0], padded_gpts[1])))
+
+        k2 = kx[:, None] ** 2 + ky[None, :] ** 2
+
+        def phase_ramp(kx, ky, position):
+            return complex_exponential(-2 * np.pi * (kx[:, None] * position[0] + ky[None, :] * position[1]))
+
+        for atomic_number in self._species:
+            positions = self.get_positions_in_slice(atomic_number)
+            for position in positions:
+                f = tf.cast(self.parametrization._create_scattering_factor(atomic_number)(k2), tf.complex64)
+
+                f *= phase_ramp(kx, ky, position[:2])
+                v.assign_add(tf.math.abs(tf.signal.ifft2d(f)) / np.prod(self.sampling))
+
+        return v[None] / kappa
+
+    def _evaluate_splines(self):
         self.check_is_defined()
 
         margin = (self.get_margin() / min(self.sampling)).astype(np.int32)
@@ -511,8 +558,21 @@ class Potential(HasGrid, TensorFactory):
 
         return v[None, :, :] / kappa
 
+    def _calculate_tensor(self):
+
+        if self.method == 'splines':
+            tensor = self._evaluate_splines()
+
+        elif self.method == 'fourier':
+            tensor = self._evaluate_fourier()
+
+        else:
+            raise RuntimeError('')
+
+        return TensorWithGrid(tensor, extent=self.extent, space='direct')
+
     def show(self, **kwargs):
-        self.get_tensor().show(**kwargs)
+        self.build().show(**kwargs)
 
     def show_atoms(self, plane='xy', scale=100, margin=True, fig_scale=1):
 
@@ -557,7 +617,7 @@ class ArrayPotential(HasGrid):
 
     def __init__(self, array, box, num_slices=None, projected=False):
 
-        self._array = np.float32(array - array.min())
+        self._array = np.complex64(array - array.min())
 
         if num_slices is None:
             num_slices = np.ceil(box[2] / .5).astype(np.int32)
@@ -649,12 +709,12 @@ class ArrayPotential(HasGrid):
             yield self._create_tensor(i)
 
     def get_tensor(self, i=0):
-        return Tensor(self._create_tensor(i), extent=self.extent)
+        return TensorWithGrid(self._create_tensor(i), extent=self.extent)
 
     def _create_tensor(self, i=None):
 
         if self._projected:
-            return tf.convert_to_tensor(self._array[..., i][None, :, :], dtype=tf.float32)
+            return tf.convert_to_tensor(self._array[..., i][None, :, :], dtype=tf.complex64)
 
         return (tf.reduce_sum(self._array[:, :, i * self.slice_thickness_voxels:
                                                 i * self.slice_thickness_voxels + self.slice_thickness_voxels],

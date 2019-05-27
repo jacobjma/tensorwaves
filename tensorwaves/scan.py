@@ -1,36 +1,22 @@
-from collections import Iterable
-from collections import OrderedDict
 from numbers import Number
 
 import numpy as np
 import tensorflow as tf
 
-from tensorwaves.bases import Tensor
-from tensorwaves.utils import batch_generator, ProgressBar
+from tensorwaves.bases import TensorWithGrid
+from tensorwaves.utils import batch_generator, create_progress_bar
 
 
 class Scan(object):
 
-    def __init__(self, scanable=None, detectors=None, ):
+    def __init__(self, scanable=None):
         self._scanable = scanable
-        if detectors is None:
-            self._detectors = []
-        else:
-
-            if not isinstance(detectors, Iterable):
-                self._detectors = [detectors]
-            else:
-                self._detectors = detectors
 
         self._data = None
 
     @property
     def scanable(self):
         return self._scanable
-
-    @property
-    def detectors(self):
-        return self._detectors
 
     def get_positions(self):
         raise NotImplementedError('')
@@ -42,53 +28,35 @@ class Scan(object):
     def generate_positions(self, max_batch, tracker=None):
         num_iter = (np.prod(self.num_positions) + max_batch - 1) // max_batch
 
-        bar = ProgressBar(num_iter=num_iter, description='Scanning')
-
-        # if tracker is not None:
-        #     tracker.add_bar(bar)
-
         positions = self.get_positions()
 
-        for i, (start, stop) in enumerate(batch_generator(positions.shape[0], max_batch)):
-            bar.update(i)
-
+        for start, stop in create_progress_bar(batch_generator(positions.shape[0], max_batch),
+                                               num_iter=num_iter,
+                                               description='Scanning'):
             yield positions[start:start + stop]
 
-        # if tracker is not None:
-        #     del tracker._output[bar]
 
-    def scan(self, max_batch=5, potential=None, tracker=None):
+class CustomScan(Scan):
+    def __init__(self, scanable, positions, detectors=None):
+        Scan.__init__(self, scanable=scanable)
+        self._positions = positions
 
-        if self.detectors:
-            self._data = OrderedDict(zip(self.detectors, [[]] * len(self.detectors)))
+    @property
+    def num_positions(self):
+        return len(self._positions)
 
-        else:
-            self._data = []
+    def get_positions(self):
+        return self._positions
 
-        for i, positions in enumerate(self.generate_positions(max_batch)):
-
-            self.scanable._translate.positions = positions
-
-            if potential is not None:
-                tensor = self.scanable.multislice(potential)
-
-            else:
-                tensor = self.scanable.get_tensor()
-
-            if self.detectors:
-                for detector, detections in self._data.items():
-                    detections.append(detector.detect(tensor))
-
-            else:
-                self._data.append(tensor)
-
-        return self._data
+    def numpy(self):
+        detector = next(iter(self._data.keys()))
+        return np.hstack([value.numpy() for value in self._data[detector]])
 
 
 class LineScan(Scan):
 
-    def __init__(self, scanable, start, end, num_positions=None, detectors=None, sampling=None, endpoint=True):
-        Scan.__init__(self, scanable=scanable, detectors=detectors)
+    def __init__(self, scanable, start, end, num_positions=None, sampling=None, endpoint=True):
+        Scan.__init__(self, scanable=scanable)
 
         self._start = np.array(start, dtype=np.float32)
         self._end = np.array(end, dtype=np.float32)
@@ -133,10 +101,10 @@ class LineScan(Scan):
 
 class GridScan(Scan):
 
-    def __init__(self, scanable=None, start=None, end=None, num_positions=None, detectors=None, sampling=None,
+    def __init__(self, scanable=None, start=None, end=None, num_positions=None, sampling=None,
                  endpoint=False):
 
-        Scan.__init__(self, scanable=scanable, detectors=detectors)
+        Scan.__init__(self, scanable=scanable)
 
         self._shape = num_positions
 
@@ -180,7 +148,18 @@ class GridScan(Scan):
 
     @property
     def num_positions(self):
-        return np.prod(self._num_positions)
+        return self._num_positions
+
+    @property
+    def sampling(self):
+        return np.array([(self._end[0] - self._start[0]) / (self._num_positions[0] - 1),
+                         (self._end[1] - self._start[1]) / (self._num_positions[1] - 1)])
+
+    def get_x_positions(self):
+        return np.linspace(self._start[0], self._end[0], self._num_positions[0])
+
+    def get_y_positions(self):
+        return np.linspace(self._start[1], self._end[1], self._num_positions[1])
 
     def get_positions(self):
         x = np.linspace(self._start[0], self._end[0], self._num_positions[0])
@@ -195,29 +174,25 @@ class GridScan(Scan):
 
         tensor = tf.reshape(tf.concat(self._data[detector], 0), self._num_positions)
 
-        return Tensor(tensor[None], extent=self._end-self._start)
+        return TensorWithGrid(tensor[None], extent=self._end - self._start)
 
-    #def show(self):
+    def numpy(self):
+        return self.image().numpy()
+        # np.hstack(tf.convert_to_tensor(self._data[detector]).numpy()).reshape(self._num_positions)
 
-    def numpy(self, detector=None):
-        if detector is None:
-            detector = next(iter(self._data.keys()))
-
-        return np.hstack(tf.convert_to_tensor(self._data[detector]).numpy()).reshape(self._num_positions)
-
-    def split(self, n):
-        positions = self.get_positions()
-
-        N = positions.shape[0].value
-        m = N // n
-        scanners = []
-
-        i = 0
-        for i in range(n - 1):
-            scanners.append(Scan(scanable=self._scanable, detectors=self.detectors,
-                                 positions=positions[i * m:(i + 1) * m]))
-
-        scanners.append(Scan(scanable=self._scanable, detectors=self.detectors,
-                             positions=positions[(i + 1) * m:]))
-
-        return scanners
+    # def split(self, n):
+    #     positions = self.get_positions()
+    #
+    #     N = positions.shape[0].value
+    #     m = N // n
+    #     scanners = []
+    #
+    #     i = 0
+    #     for i in range(n - 1):
+    #         scanners.append(Scan(scanable=self._scanable, detectors=self.detectors,
+    #                              positions=positions[i * m:(i + 1) * m]))
+    #
+    #     scanners.append(Scan(scanable=self._scanable, detectors=self.detectors,
+    #                          positions=positions[(i + 1) * m:]))
+    #
+    #     return scanners

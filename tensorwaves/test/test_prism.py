@@ -81,3 +81,21 @@ def test_gridscan():
     prism_scan = S.gridscan(start=(0, 0), end=(4, 4), num_positions=(10, 10), detectors=(detector,))
 
     assert np.allclose(scan.numpy(), prism_scan.numpy())
+
+
+def test_set_parameters():
+    waves = PrismWaves(gpts=128, extent=5, energy=200e3, cutoff=.01, interpolation=1)
+    S = waves.get_scattering_matrix()
+    S.get_probe()
+    S.aberrations.parametrization.defocus = 100.
+
+    probe_1 = S.get_probe()
+
+    waves = PrismWaves(gpts=128, extent=5, energy=200e3, cutoff=.01, interpolation=1)
+    S = waves.get_scattering_matrix()
+    S.get_probe()
+    S.aberrations.set_parameters({'C10': 100.})
+
+    probe_2 = S.get_probe()
+
+    assert np.all(probe_1.image().numpy() == probe_2.image().numpy())

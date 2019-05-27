@@ -1,11 +1,12 @@
-import matplotlib.pyplot as plt
-from mpl_toolkits.axes_grid1 import make_axes_locatable
-import numpy as np
+from colorsys import hls_to_rgb
+
+import matplotlib
 import matplotlib.gridspec as gridspec
+import matplotlib.pyplot as plt
+import numpy as np
 from ase.data import covalent_radii
 from ase.data.colors import cpk_colors
-
-from colorsys import hls_to_rgb
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 
 def domain_coloring(z, fade_to_white=False, saturation=1, k=.5):
@@ -74,11 +75,14 @@ def plot_labels(display_space):
     return labels
 
 
-def show_array(array, extent, space, display_space='direct', mode='magnitude', scale='linear', colorbar=True, vmin=None,
-               vmax=None, num_cols=4, fig_scale=1, **kwargs):
+def show_array(array, extent, space, display_space='direct', mode='intensity', scale='linear', colorbar=True, vmin=None,
+               vmax=None, num_cols=4, fig_scale=1, tile=(1, 1), **kwargs):
     num_images = len(array)
     num_cols = min(num_cols, num_images)
     num_rows = (num_images + num_cols - 1) // num_cols
+
+    extent = extent * tile
+    array = np.tile(array, (1,) + tile)
 
     x_range, y_range = plot_range(extent, array.shape[1:], display_space)
 
@@ -131,6 +135,7 @@ def show_array(array, extent, space, display_space='direct', mode='magnitude', s
     ax = plt.subplot(right[1, 0])
     plt.colorbar(mapable, cax=ax, orientation='vertical', label='', )
 
+    return ax
     # gs.tight_layout(fig)
 
 
@@ -138,22 +143,25 @@ def show_line(x, y, mode, ax=None, **kwargs):
     if ax is None:
         ax = plt.subplot()
 
-    ax.plot(x, convert_complex(y, mode=mode), **kwargs)
+    if np.any(np.iscomplex(y)):
+        y = convert_complex(y, mode=mode)
+
+    ax.plot(x, y, **kwargs)
 
 
-def add_colorbar(ax, mapable, position='right', size='5%', pad=0.05, **kwargs):
-    if position in ['right', 'left']:
-        orientation = 'vertical'
-    elif position in ['top', 'bottom']:
-        orientation = 'horizontal'
-    else:
-        raise RuntimeError()
-
-    divider = make_axes_locatable(ax)
-    cax = divider.append_axes(position, size=size, pad=pad)
-    plt.colorbar(mapable, cax=cax, orientation=orientation, **kwargs)
-
-    return cax
+# def add_colorbar(ax, mapable, position='right', size='5%', pad=0.05, **kwargs):
+#     if position in ['right', 'left']:
+#         orientation = 'vertical'
+#     elif position in ['top', 'bottom']:
+#         orientation = 'horizontal'
+#     else:
+#         raise RuntimeError()
+#
+#     divider = make_axes_locatable(ax)
+#     cax = divider.append_axes(position, size=size, pad=pad)
+#     plt.colorbar(mapable, cax=cax, orientation=orientation, **kwargs)
+#
+#     return cax
 
 
 def plane2axes(plane):
@@ -165,7 +173,35 @@ def plane2axes(plane):
     return axes
 
 
-def display_atoms(positions, numbers, plane, origin, box, scale=100, ax=None, colors=None, fig_scale=1):
+def add_colorbar(ax, cmap, vmin, vmax, n_ticks=5, ticks=None, position='bottom', size='5%', pad=0.05, **kwargs):
+    if position in ['right', 'left']:
+        orientation = 'vertical'
+    elif position in ['top', 'bottom']:
+        orientation = 'horizontal'
+
+    norm = matplotlib.colors.Normalize(vmin=vmin, vmax=vmax)
+
+    if ticks is None:
+        ticks = np.linspace(vmin, vmax, n_ticks)
+
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes(position, size=size, pad=pad)
+    sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])
+
+    return plt.colorbar(sm, cax=cax, orientation=orientation, ticks=ticks, **kwargs)
+
+
+def plot_atoms(atoms, plane='xy', ax=None, scale=1, fig_scale=1):
+    positions = atoms.get_positions()
+    numbers = atoms.get_atomic_numbers()
+    origin = np.array([0., 0., 0.])
+    box = np.diag(atoms.get_cell())
+    return _plot_atoms(positions=positions, numbers=numbers, plane=plane, origin=origin, box=box, scale=scale, ax=ax,
+                       fig_scale=fig_scale)
+
+
+def _plot_atoms(positions, numbers, plane, origin, box, scale=1, ax=None, colors=None, fig_scale=1):
     if ax is None:
         fig, ax = plt.subplots(figsize=(8 * fig_scale, 6 * fig_scale))
 
@@ -184,7 +220,5 @@ def display_atoms(positions, numbers, plane, origin, box, scale=100, ax=None, co
             colors = cpk_colors[numbers]
         sizes = covalent_radii[numbers]
 
-        ax.scatter(*positions.T, c=colors, s=scale * sizes)
+        ax.scatter(*positions.T, c=colors, s=scale * sizes * 100)
         ax.axis('equal')
-
-    plt.show()

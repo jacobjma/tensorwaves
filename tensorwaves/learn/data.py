@@ -1,14 +1,7 @@
-import os
-
 import numpy as np
-import tensorflow as tf
-from ase.io import read
+
 from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.spatial.distance import cdist
-from skimage.transform import rescale
-from sklearn.model_selection import train_test_split
-
-from tensorwaves.bases import HasGrid, GridProperty
 
 
 def cluster_and_classify(atoms=None, atomic_positions=None, atomic_numbers=None, distance=1., fingerprints=None,
@@ -54,21 +47,19 @@ def cluster_positions(atomic_positions, cluster_ids, class_ids):
     return np.array(positions)[:, :2], cluster_class_ids
 
 
-def gaussian_markers(positions, shape, width, cluster_class_ids=None, num_classes=None):
-    if cluster_class_ids is None:
-        cluster_class_ids = np.array([0] * len(positions))
+def gaussian_marker_label(atoms, shape, width, periodic=False):
+    positions = atoms.get_positions()[:, :2]
 
-    if num_classes is None:
-        num_classes = np.max(cluster_class_ids) + 1
+    positions = positions / np.diag(atoms.get_cell())[:2] * shape
 
     if isinstance(shape, int):
         shape = (shape, shape)
 
     margin = np.int(4 * width)
     x, y = np.mgrid[0:shape[0] + 2 * margin, 0:shape[1] + 2 * margin]
-    markers = np.zeros((shape[0] + 2 * margin, shape[1] + 2 * margin) + (num_classes,))
+    markers = np.zeros((shape[0] + 2 * margin, shape[1] + 2 * margin))
 
-    for position, cluster_class_id in zip(positions, cluster_class_ids):
+    for position in positions:
         x_lim_min = np.round(position[0]).astype(int)
         x_lim_max = np.round(position[0] + 2 * margin + 1).astype(int)
         y_lim_min = np.round(position[1]).astype(int)
@@ -77,226 +68,129 @@ def gaussian_markers(positions, shape, width, cluster_class_ids=None, num_classe
         x_window = x[x_lim_min: x_lim_max, y_lim_min: y_lim_max]
         y_window = y[x_lim_min: x_lim_max, y_lim_min: y_lim_max]
 
-        gaussian = np.exp(-cdist(position[None] + margin, np.array([x_window.ravel(),
-                                                                    y_window.ravel()]).T) ** 2 / (
-                                  2 * width ** 2))
-        markers[x_window, y_window, cluster_class_id] += gaussian.reshape(x_window.shape)
+        distances = cdist(position[None] + margin, np.array([x_window.ravel(), y_window.ravel()]).T)
 
-    markers[margin:2 * margin] += markers[-margin:]
-    markers[-2 * margin:-margin] += markers[:margin]
-    markers[:, margin:2 * margin] += markers[:, -margin:]
-    markers[:, -2 * margin:-margin] += markers[:, :margin]
+        gaussian = np.exp(- distances ** 2 / (2 * width ** 2))
+
+        markers[x_window, y_window] += gaussian.reshape(x_window.shape)
+
+    if periodic:
+        markers[margin:2 * margin] += markers[-margin:]
+        markers[-2 * margin:-margin] += markers[:margin]
+        markers[:, margin:2 * margin] += markers[:, -margin:]
+        markers[:, -2 * margin:-margin] += markers[:, :margin]
 
     markers = markers[margin:-margin, margin:-margin]
 
     return markers
 
 
-class Sequence(tf.keras.utils.Sequence):
-    def __init__(self, training_set, batch_size=32, shuffle=True, augmentations=None):
-
-        self.training_set = training_set
-        self.batch_size = batch_size
-        self.shuffle = shuffle
-        self.augmentations = augmentations
-        self.on_epoch_end()
-
-        image, label = training_set[0].as_tensors(augmentations=augmentations)
-        self.image_shape = image.shape[1:]
-        self.label_shape = label.shape[1:]
-
-    def __len__(self):
-        return int(np.floor(len(self.training_set) / self.batch_size))
-
-    def __getitem__(self, i):
-        # Generate indexes of the batch
-        batch_indices = self.indices[i * self.batch_size:(i + 1) * self.batch_size]
-
-        if i == len(self) - 1:
-            self.on_epoch_end()
-
-        batch_images = np.zeros((self.batch_size,) + self.image_shape)
-        batch_labels = np.zeros((self.batch_size,) + self.label_shape)
-
-        for j, batch_index in enumerate(batch_indices):
-            image, label = self.training_set[batch_index].as_tensors(self.augmentations)
-            batch_images[j] = image
-            batch_labels[j] = label
-
-        return (batch_images, batch_labels), (batch_labels, batch_labels, batch_labels)
-
-    def on_epoch_end(self):
-        self.indices = np.arange(len(self.training_set))
-        if self.shuffle == True:
-            np.random.shuffle(self.indices)
+def generate_indices(labels):
+    labels = labels.flatten()
+    labels_order = labels.argsort()
+    sorted_labels = labels[labels_order]
+    indices = np.arange(0, len(labels) + 1)[labels_order]
+    index = np.arange(1, np.max(labels) + 1)
+    lo = np.searchsorted(sorted_labels, index, side='left')
+    hi = np.searchsorted(sorted_labels, index, side='right')
+    for i, (l, h) in enumerate(zip(lo, hi)):
+        yield np.sort(indices[l:h])
 
 
-class TrainingSet(object):
+def voronoi_label(atoms, shape):
+    from skimage.morphology import watershed
 
-    def __init__(self, examples=None):
-        self._examples = examples
+    positions = atoms.get_positions()[:, :2]
 
-    def __getitem__(self, i):
-        return self._examples[i]
+    positions = positions / np.diag(atoms.get_cell())[:2] * shape
 
-    def __len__(self):
-        return len(self._examples)
+    markers = np.zeros(shape, dtype=np.int)
+    indices = (positions).astype(int)
+    markers[indices[:, 0], indices[:, 1]] = range(1, len(positions) + 1)
+    labels = watershed(np.zeros_like(markers), markers, compactness=1000)
 
-    @property
-    def num_examples(self):
-        return len(self._examples)
-
-    @property
-    def image_shape(self):
-        return self._examples[0]._image.shape
-
-    @property
-    def label_shape(self):
-        return tuple(self._examples[0].gpts) + (3,)
-
-    def generator(self, batch_size=32, shuffle=True, augmentations=None):
-        def g():
-            while True:
-                sequence = Sequence(self, batch_size=batch_size, shuffle=shuffle, augmentations=augmentations)
-                for i in range(len(sequence)):
-                    yield sequence[i]
-
-        return g
-
-    @property
-    def height(self):
-        return self._examples[0].gpts[0]
-
-    @property
-    def width(self):
-        return self._examples[0].gpts[1]
-
-    def split(self, test_size):
-        train_examples, test_examples = train_test_split(self._examples, test_size=test_size)
-        return TrainingSet(train_examples), TrainingSet(test_examples)
-
-    def apply_to_all(self, func, *args):
-        for example in self._examples:
-            getattr(example, func)(*args)
-
-    def cluster_and_classify(self, distance, fingerprints=None, assign_unidentified=-1):
-        self.apply_to_all('cluster_and_classify', distance, fingerprints, assign_unidentified)
-
-    def create_labels(self, gaussian_width=.25, depth=None, include_null=True):
-        self.apply_to_all('create_label', gaussian_width, depth, include_null)
-
-    def resample(self, sampling):
-        self.apply_to_all('resample', sampling)
+    return labels
 
 
-def load_training_set(image_dir, atoms_dir=None):
-    if atoms_dir is None:
-        atoms_dir = image_dir
+def voronoi_masks(atoms, shape):
+    labels = voronoi_label(atoms, shape)
 
-    image_files = sorted([file for file in os.listdir(atoms_dir) if file[:5] == 'image'])
-    atoms_files = sorted([file for file in os.listdir(atoms_dir) if file[:5] == 'atoms'])
+    masks = np.zeros((shape[0] * shape[1],) + (len(atoms),), dtype=bool)
 
-    examples = []
-    for image_file, atoms_file in zip(image_files, atoms_files):
-        atoms = read(os.path.join(atoms_dir, atoms_file))
-        image = np.load(os.path.join(image_dir, image_file))[0]
-        examples.append(TrainingExample(atoms, image))
+    for i, indices in enumerate(generate_indices(labels)):
+        masks[indices, i] = True
 
-    return TrainingSet(examples)
+    return masks.reshape(shape + (-1,))
 
 
-class TrainingExample(HasGrid):
+def closest_position_label(atoms, shape):
+    from skimage.morphology import watershed
 
-    def __init__(self, atoms, image, label=None):
-        self._atoms = atoms
-        self._image = image.reshape(image.shape[:2] + (-1,))
-        self._cluster_ids = None
-        self._class_ids = None
-        self._label = label
+    positions = atoms.get_positions()[:, :2]
 
-        extent = GridProperty(lambda: np.diag(self._atoms.get_cell())[:2], dtype=np.float32, locked=True)
-        gpts = GridProperty(lambda: self._image.shape[:-1], dtype=np.int32, locked=True)
+    positions = positions / np.diag(atoms.get_cell())[:2] * shape
 
-        HasGrid.__init__(self, extent=extent, gpts=gpts)
+    markers = np.zeros(shape, dtype=np.int)
+    indices = (positions).astype(int)
+    markers[indices[:, 0], indices[:, 1]] = range(1, len(positions) + 1)
+    labels = watershed(np.zeros_like(markers), markers, compactness=1000)
 
-    @property
-    def image(self):
-        return self._image
+    x = np.zeros(labels.shape, dtype=np.float).flatten()
+    y = np.zeros(labels.shape, dtype=np.float).flatten()
 
-    @property
-    def label(self):
-        return self._label
+    for i, indices in enumerate(generate_indices(labels)):
+        x[indices] = positions[i, 0]
+        y[indices] = positions[i, 1]
 
-    @property
-    def num_classes(self):
-        return np.max(self._class_ids) + 1
+    return np.stack([x.reshape(labels.shape), y.reshape(labels.shape)], -1).reshape(shape + (2,))
 
-    def as_tensors(self, augmentations=None):
-        image, label = self._image.copy(), self._label.copy()
 
-        if augmentations:
-            for augmentation in augmentations:
+def apply_augmentations(images, atoms, augmentations):
+    for i in range(len(images)):
+        for augmentation in augmentations:
+            if augmentation.image_only:
+                images[i] = augmentation.apply(images[i])
+            else:
+                images[i], atoms[i] = augmentation.apply(images[i], atoms[i])
 
-                try:
-                    image, label = augmentation.apply_image_and_label(image, label)
-                except AttributeError:
-                    try:
-                        image = augmentation.apply_image(image)
-                    except AttributeError:
-                        raise
+    return images, atoms
 
-        return image[None], label[None]
 
-    def resample(self, sampling):
-        scale = self.sampling / sampling
-        self._image = rescale(self._image, scale, multichannel=True, mode='wrap', anti_aliasing=False, order=1)
+def data_generator(images, atoms, label_func, batch_size=32, shuffle=True, augmentations=None):
+    if augmentations is None:
+        augmentations = []
 
-    def cluster_and_classify(self, distance, fingerprints=None, assign_unidentified=-1):
+    num_iter = len(images) // batch_size
+    assert images.shape[1] == images.shape[2]
 
-        if fingerprints is None:
-            # TODO : Implement this
-            raise NotImplementedError()
+    while True:
+        for i in range(num_iter):
+            if i == 0:
+                indices = np.arange(len(images))
+                np.random.shuffle(indices)
 
-        cluster_ids, class_ids = cluster_and_classify(self._atoms, distance=distance, fingerprints=fingerprints)
+            batch_indices = indices[i * batch_size:(i + 1) * batch_size]
+            batch_images = [images[i].copy() for i in batch_indices]
+            batch_atoms = [atoms[i].copy() for i in batch_indices]
 
-        class_ids[class_ids == -1] = assign_unidentified
+            for j in range(batch_size):
+                for augmentation in augmentations:
+                    if augmentation.image_only:
+                        batch_images[j] = augmentation.apply(batch_images[j])
+                    else:
+                        batch_images[j], batch_atoms[j] = augmentation.apply(batch_images[j], batch_atoms[j])
 
-        self._cluster_ids = cluster_ids
-        self._class_ids = class_ids
+            batch_images = np.stack(batch_images)
 
-    def create_label(self, gaussian_width=.25, depth=None, include_null=True):
+            size = batch_images.shape[1:-1]
+            #displacements = np.zeros((batch_size, size // 4, size // 4, 2), dtype=np.float32)
+            #markers = np.zeros((batch_size, size // 4, size // 4, 1), dtype=np.float32)
+            #instances = np.zeros((batch_size, size // 4, size // 4, 1), dtype=np.int)
 
-        if depth is None:
-            depth = self.num_classes + 1
+            #neighbors = []
+            #neighbor_weights = []
+            # weights = np.zeros((batch_size, size // 4, size // 4, 1), dtype=np.float32)
 
-        positions, cluster_class_ids = cluster_positions(self._atoms.get_positions(), self._cluster_ids,
-                                                         self._class_ids)
+            batch_labels = label_func(batch_atoms, size)
 
-        self._label = gaussian_marker_label(positions / self.sampling, cluster_class_ids, self.gpts, gaussian_width,
-                                            depth,
-                                            include_null=include_null)
-
-    def show_clusters(self):
-        import matplotlib.pyplot as plt
-        positions, cluster_class_ids = cluster_positions(self._atoms.get_positions(), self._cluster_ids,
-                                                         self._class_ids)
-
-        plt.imshow(self._image[..., 0].T, origin='lower', extent=[0, self.extent[0], 0, self.extent[1]], cmap='gray')
-
-        for cluster_class_id in np.unique(cluster_class_ids):
-            class_positions = positions[np.where(cluster_class_ids == cluster_class_id)]
-            plt.scatter(*class_positions.T, label=cluster_class_id)
-
-        plt.xlim([0, self.extent[0]])
-        plt.ylim([0, self.extent[1]])
-
-    def show_label(self):
-        import matplotlib.pyplot as plt
-        fig, axes = plt.subplots(1, self.num_classes + 1, figsize=(12, 5))
-        for i, ax in enumerate(axes):
-            ax.imshow(self._label[:, :, i].T, origin='lower')
-
-    def show_image(self):
-        import matplotlib.pyplot as plt
-        fig, ax = plt.subplots(1, 1, figsize=(6, 6))
-        ax.imshow(self._image[..., 0].T, origin='lower', extent=[0, self.extent[0], 0, self.extent[1]], cmap='gray')
+            yield batch_images, batch_labels

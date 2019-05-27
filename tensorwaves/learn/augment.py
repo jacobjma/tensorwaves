@@ -109,7 +109,7 @@ class ScaleAndShift(Augmentation):
         self.scale_jitter = scale_jitter
         self.shift_jitter = shift_jitter
 
-    def apply_image(self, image):
+    def apply(self, image):
         scale = self.scale + self.scale_jitter * np.random.randn()
         shift = self.shift + self.shift_jitter * np.random.randn()
         return scale * image + shift
@@ -254,31 +254,33 @@ def bandpass_noise_2d(inner, outer, shape):
 
 class ScanNoise(Augmentation):
 
-    def __init__(self, scale, amount, fine_amount=None):
+    def __init__(self, scale, amount, fine_amount=None, p=1.):
 
-        Augmentation.__init__(self)
+        Augmentation.__init__(self, p=p, image_only=True)
         self.scale = scale
         self.amount = amount
         if fine_amount is None:
             self.fine_amount = self.amount / 2
 
-    def apply_image(self, image):
-        fine_scale = np.max(image.shape[:-1])
+    def apply(self, image):
+        if self._p > np.random.rand():
+            fine_scale = np.max(image.shape[:-1])
 
-        n = ((self.amount * bandpass_noise(0, self.scale, image.shape[1]) +
-              self.amount / 2 * bandpass_noise(0, fine_scale, image.shape[1]))).astype(int)
+            n = ((self.amount * bandpass_noise(0, self.scale, image.shape[1]) +
+                  self.amount / 2 * bandpass_noise(0, fine_scale, image.shape[1]))).astype(int)
 
-        def strided_indexing_roll(a, r):
-            from skimage.util.shape import view_as_windows
-            a_ext = np.concatenate((a, a[:, :-1]), axis=1)
-            n = a.shape[1]
-            return view_as_windows(a_ext, (1, n))[np.arange(len(r)), (n - r) % n, 0]
+            def strided_indexing_roll(a, r):
+                from skimage.util.shape import view_as_windows
+                a_ext = np.concatenate((a, a[:, :-1]), axis=1)
+                n = a.shape[1]
+                return view_as_windows(a_ext, (1, n))[np.arange(len(r)), (n - r) % n, 0]
 
-        for i in range(image.shape[-1]):
-            image[..., i] = strided_indexing_roll(image[..., i], n)
+            for i in range(image.shape[-1]):
+                image[..., i] = strided_indexing_roll(image[..., i], n)
 
-        return image
-
+            return image
+        else:
+            return image
 #
 # class Dirt(ImageAugmentation):
 #

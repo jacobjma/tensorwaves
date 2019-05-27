@@ -1,7 +1,8 @@
 import numpy as np
 import tensorflow as tf
 from ase import units
-from tensorwaves.plotutils import show_array
+
+from tensorwaves.plotutils import show_array, show_line
 
 
 def named_property(name):
@@ -59,8 +60,6 @@ class Observer(object):
 
     def observe(self, observable):
         observable.register_observer(self)
-        if observable not in self._observing:
-            self._observing.append(observable)
 
     def notify(self, observable, message):
         raise NotImplementedError()
@@ -74,37 +73,42 @@ class TensorFactory(Observer):
         self._save_tensor = save_tensor
         self._tensor = None
 
+    @property
+    def save_tensor(self):
+        return self._save_tensor
+
     def notify(self, observable, message):
         if message['change']:
             self.up_to_date = False
 
-    def _calculate_tensor(self, *args):
-        raise NotImplementedError()
-
     def check_is_defined(self):
         raise NotImplementedError()
 
-    def get_tensor(self):
+    def _calculate_tensor(self, *args):
+        raise NotImplementedError()
+
+    def build(self, *args):
         self.check_is_defined()
 
         if self.up_to_date & self._save_tensor:
-            data = self._tensor
+            tensor = self._tensor
         else:
-            data = self._calculate_tensor()
+            tensor = self._calculate_tensor(*args)
             if self._save_tensor:
-                self._tensor = data
+                self._tensor = tensor
                 self.up_to_date = True
-        return data
+        return tensor
 
-    def clear_tensor(self):
-        self._tensor = None
-        self.up_to_date = False
-
-    def tensorflow(self):
-        return self.get_tensor().tensorflow()
+    def tensor(self):
+        self.build()
+        return self._tensor
 
     def numpy(self):
-        return self.get_tensor().numpy()
+        return self.build()._tensor.numpy()
+
+    def clear(self):
+        self._tensor = None
+        self.up_to_date = False
 
 
 def linspace_no_endpoint(start, stop, num, dtype=tf.float32):
@@ -135,7 +139,7 @@ def linspace_no_endpoint(start, stop, num, dtype=tf.float32):
     return tf.linspace(start, interval - interval / tf.cast(num, tf.float32), num)
 
 
-def fftfreq(n, d):
+def fftfreq(n, d=1.):
     """
     Return the Discrete Fourier Transform sample frequencies.
 
@@ -165,9 +169,10 @@ def fftfreq_range(extent, n):
 
 class GridProperty(object):
 
-    def __init__(self, value, dtype, locked=False):
+    def __init__(self, value, dtype, locked=False, dimensions=2):
         self._dtype = dtype
         self._locked = locked
+        self._dimensions = dimensions
         self._value = self._validate(value)
 
     @property
@@ -183,12 +188,12 @@ class GridProperty(object):
 
     def _validate(self, value):
         if isinstance(value, (np.ndarray, list, tuple)):
-            if len(value) != 2:
-                raise RuntimeError('')
+            if len(value) != self._dimensions:
+                raise RuntimeError('grid value length of {} != {}'.format(len(value), self._dimensions))
             value = np.array(value).astype(self._dtype)
 
         elif isinstance(value, (int, float, complex)):
-            value = np.full(2, value, dtype=self._dtype)
+            value = np.full(self._dimensions, value, dtype=self._dtype)
 
         elif callable(value):
             if not self._locked:
@@ -209,7 +214,7 @@ class GridProperty(object):
         self._value = self._validate(value)
 
     def copy(self):
-        return self.__class__(value=self._value, dtype=self._dtype, locked=self._locked)
+        return self.__class__(value=self._value, dtype=self._dtype, locked=self._locked, dimensions=self._dimensions)
 
 
 def xy_property(component, name):
@@ -226,23 +231,25 @@ def xy_property(component, name):
 
 class Grid(Observable):
 
-    def __init__(self, extent=None, gpts=None, sampling=None):
+    def __init__(self, extent=None, gpts=None, sampling=None, dimensions=2):
         Observable.__init__(self)
+
+        self._dimensions = dimensions
 
         if isinstance(extent, GridProperty):
             self._extent = extent
         else:
-            self._extent = GridProperty(extent, np.float32, locked=False)
+            self._extent = GridProperty(extent, np.float32, locked=False, dimensions=dimensions)
 
         if isinstance(gpts, GridProperty):
             self._gpts = gpts
         else:
-            self._gpts = GridProperty(gpts, np.int32, locked=False)
+            self._gpts = GridProperty(gpts, np.int32, locked=False, dimensions=dimensions)
 
         if isinstance(sampling, GridProperty):
             self._sampling = sampling
         else:
-            self._sampling = GridProperty(sampling, np.float32, locked=False)
+            self._sampling = GridProperty(sampling, np.float32, locked=False, dimensions=dimensions)
 
         if self.extent is None:
             if not ((self.gpts is None) | (self.sampling is None)):
@@ -255,6 +262,12 @@ class Grid(Observable):
         if self.sampling is None:
             if not ((self.extent is None) | (self.gpts is None)):
                 self._sampling.value = self._adjusted_sampling()
+
+        if (extent is not None) & (self.gpts is not None):
+            self._sampling.value = self._adjusted_sampling()
+
+        if (gpts is not None) & (self.extent is not None):
+            self._sampling.value = self._adjusted_sampling()
 
     @property
     def extent(self):
@@ -351,6 +364,12 @@ class Grid(Observable):
         if (self.extent is None) | (self.gpts is None) | (self.sampling is None):
             raise RuntimeError('grid is not defined')
 
+    def clear(self):
+        self._extent.value = None
+        self._gpts.value = None
+        self._sampling.value = None
+        self.notify_observers({'change': True})
+
     def match(self, other):
         if self.extent is None:
             self.extent = other.extent
@@ -380,7 +399,8 @@ class Grid(Observable):
             raise RuntimeError('inconsistent grids')
 
     def copy(self):
-        return self.__class__(extent=self._extent.copy(), gpts=self._gpts.copy(), sampling=self._sampling.copy())
+        return self.__class__(extent=self._extent.copy(), gpts=self._gpts.copy(), sampling=self._sampling.copy(),
+                              dimensions=self._dimensions)
 
     x_extent = xy_property(0, 'extent')
     y_extent = xy_property(1, 'extent')
@@ -394,15 +414,21 @@ class Grid(Observable):
 
 class HasGrid(object):
 
-    def __init__(self, extent=None, gpts=None, sampling=None, grid=None):
-        if grid is None:
-            grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
+    def __init__(self, extent=None, gpts=None, sampling=None, grid=None, dimensions=2):
 
-        self._grid = grid
+        if grid is None:
+            self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling, dimensions=dimensions)
+
+        else:
+            self._grid = grid
 
     extent = referenced_property('_grid', 'extent')
     gpts = referenced_property('_grid', 'gpts')
     sampling = referenced_property('_grid', 'sampling')
+
+    @property
+    def grid(self):
+        return self._grid
 
     def linspace(self):
         return self._grid.linspace()
@@ -470,7 +496,7 @@ def energy2sigma(energy):
             units._hplanck * units.s * units.J) ** 2)
 
 
-class EnergyProperty(Observable):
+class EnergyWrapper(Observable):
 
     def __init__(self, energy=None):
         Observable.__init__(self)
@@ -509,80 +535,181 @@ class EnergyProperty(Observable):
 
 class HasEnergy(object):
 
-    def __init__(self, energy=None, energy_property=None):
-        if energy_property is None:
-            energy_property = EnergyProperty(energy=energy)
+    def __init__(self, energy=None, energy_wrapper=None):
+        if energy_wrapper is None:
+            self._energy_wrapper = EnergyWrapper(energy=energy)
 
-        elif not isinstance(energy_property, EnergyProperty):
-            raise RuntimeError('')
+        else:
+            self._energy_wrapper = energy_wrapper
 
-        self._energy = energy_property
+    energy = referenced_property('_energy_wrapper', 'energy')
+    wavelength = referenced_property('_energy_wrapper', 'wavelength')
+    sigma = referenced_property('_energy_wrapper', 'sigma')
 
-    energy = referenced_property('_energy', 'energy')
-    wavelength = referenced_property('_energy', 'wavelength')
-    sigma = referenced_property('_energy', 'sigma')
-
-    def check_is_defined(self):
-        self._energy.check_is_defined()
-
-
-class HasGridAndEnergy(object):
+    @property
+    def energy_wrapper(self):
+        return self._energy_wrapper
 
     def check_is_defined(self):
-        self._grid.check_is_defined()
-        self._energy.check_is_defined()
+        self._energy_wrapper.check_is_defined()
 
-    def match(self, other):
+
+class HasGridAndEnergy(HasGrid, HasEnergy):
+
+    def __init__(self, extent=None, gpts=None, sampling=None, energy=None, grid=None, energy_wrapper=None):
+        HasGrid.__init__(self, extent=extent, gpts=gpts, sampling=sampling, grid=grid)
+        HasEnergy.__init__(self, energy=energy, energy_wrapper=energy_wrapper)
+
+    def check_is_defined(self):
+        self.grid.check_is_defined()
+        self.energy_wrapper.check_is_defined()
+
+    def match_grid_and_energy(self, other):
         try:
-            self._grid.match(other._grid)
+            self.grid.match(other.grid)
         except AttributeError:
             pass
 
         try:
-            self._energy.match(other._energy)
+            self.energy_wrapper.match(other.energy_wrapper)
         except AttributeError:
             pass
 
     def semiangles(self):
-        kx, ky = self._grid.fftfreq()
+        kx, ky = self.grid.fftfreq()
         wavelength = self.wavelength
         return kx * wavelength, ky * wavelength
 
 
-class Tensor(HasGrid):
+class TensorBase(HasGrid):
+    def __init__(self, tensor, tensor_dimensions, spatial_dimensions, extent=None, sampling=None, space='direct'):
+        if len(tensor.shape) != tensor_dimensions:
+            raise RuntimeError('tensor shape {} not {}d'.format(tensor.shape, tensor_dimensions))
+        self._tensor = tensor
 
-    def __init__(self, tensor, extent=None, sampling=None, space='direct'):
-        self._tensorflow = tensor
+        gpts = GridProperty(lambda: self.gpts, dtype=np.int32, locked=True, dimensions=spatial_dimensions)
 
-        gpts = GridProperty(lambda: self.gpts, dtype=np.int32, locked=True)
-
-        HasGrid.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
+        HasGrid.__init__(self, extent=extent, gpts=gpts, sampling=sampling, dimensions=spatial_dimensions)
 
         self.space = space
 
     @property
     def gpts(self):
-        return np.array([dim for dim in self._tensorflow.shape[1:]])
+        raise NotImplementedError()
 
-    def tensorflow(self):
-        return self._tensorflow
+    def tensor(self):
+        return self._tensor
 
     def numpy(self):
-        return self._tensorflow.numpy()
+        return self.tensor().numpy()
 
-    def copy(self):
-        new_tensor = self.__class__(tensor=tf.identity(self._tensorflow), extent=self.extent.copy(), space=self.space)
+    def intensity(self):
+        new_tensor = self.__class__(tensor=tf.abs(self.tensor()) ** 2, space=self.space)
         new_tensor._grid = self._grid.copy()
         return new_tensor
 
-    def show(self, i=0, fig_scale=1, display_space='direct', scale='linear'):
-        show_array(self._tensorflow.numpy(), self.extent, self.space, fig_scale=fig_scale, display_space=display_space,
-                   scale=scale)
+    def copy(self):
+        new_tensor = self.__class__(tensor=tf.identity(self.tensor()), extent=self.extent.copy(), space=self.space)
+        new_tensor._grid = self._grid.copy()
+        return new_tensor
+
+    def show(self, *args):
+        raise NotImplementedError()
 
 
-class TensorWithEnergy(Tensor, HasEnergy, HasGridAndEnergy):
+class TensorWithGrid(TensorBase):
+
+    def __init__(self, tensor, extent=None, sampling=None, space='direct'):
+        TensorBase.__init__(self, tensor=tensor, tensor_dimensions=3, spatial_dimensions=2, extent=extent,
+                            sampling=sampling, space=space)
+
+    @property
+    def gpts(self):
+        return np.array([dim for dim in self.tensor().shape[1:]])
+
+    def show(self, fig_scale=1, space='direct', scale='linear', mode='intensity', tile=(1, 1)):
+        return show_array(self.numpy(), self.extent, self.space, fig_scale=fig_scale, display_space=space,
+                          mode=mode, scale=scale, tile=tile)
+
+    def profile(self, direction='x', displacement=None):
+
+        if displacement:
+            raise NotImplementedError()
+
+        if direction is 'x':
+            tensor = self._tensor[0, :, self._tensor.shape[2] // 2]
+            extent = self.extent[0]
+
+        elif direction is 'y':
+            tensor = self._tensor[0, self._tensor.shape[1] // 2, :]
+            extent = self.extent[1]
+
+        else:
+            raise RuntimeError('direction {} nor recognized'.format(direction))
+
+        return LineProfile(tensor=tensor, extent=np.array([extent]))
+
+
+class TensorWithGridAndEnergy(TensorWithGrid, HasGridAndEnergy):
 
     def __init__(self, tensor, extent=None, sampling=None, energy=None, space='direct'):
-        Tensor.__init__(self, tensor=tensor, extent=extent, sampling=sampling, space=space)
-        HasEnergy.__init__(self, energy=energy)
-        HasGridAndEnergy.__init__(self)
+        HasGridAndEnergy.__init__(self, energy=energy, extent=extent, sampling=sampling)
+        TensorWithGrid.__init__(self, tensor=tensor, extent=extent, sampling=sampling, space=space)
+
+
+class LineProfile(TensorBase):
+
+    def __init__(self, tensor, extent=None, sampling=None, space='direct'):
+        TensorBase.__init__(self, tensor=tensor, tensor_dimensions=1, spatial_dimensions=1, extent=extent,
+                            sampling=sampling, space=space)
+
+    def __len__(self):
+        return len(self._tensor)
+
+    @property
+    def gpts(self):
+        return np.array([self.tensor().shape[0]])
+
+    def show(self, mode='mag', *args, **kwargs):
+        y = self.numpy()
+        x = np.linspace(0., self.extent[0], self.gpts[0])
+        show_line(x, y, mode, *args, **kwargs)
+
+
+class Interactive(object):
+
+    def get_observables(self):
+        raise NotImplementedError()
+
+
+class FrequencyTransfer(TensorFactory, Observable):
+
+    def __init__(self, save_tensor=True):
+        TensorFactory.__init__(self, save_tensor=save_tensor)
+        Observable.__init__(self)
+
+        self.observe(self)
+
+
+class PrismCoefficients(TensorFactory, Observable):
+
+    def __init__(self, kx, ky, save_tensor=True):
+        self._kx = kx
+        self._ky = ky
+
+        TensorFactory.__init__(self, save_tensor=save_tensor)
+        Observable.__init__(self)
+
+        self.register_observer(self)
+
+    def check_is_defined(self):
+        if (self.kx is None) | (self.ky is None):
+            raise RuntimeError('')
+
+    @property
+    def kx(self):
+        return self._kx
+
+    @property
+    def ky(self):
+        return self._ky

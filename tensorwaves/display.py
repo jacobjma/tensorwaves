@@ -163,14 +163,26 @@ class ImageDisplay(InteractiveDisplay):
 
         self._scale_adjustment = 1
 
-        for observed in self._displayable._observing:
-            observed.register_observer(self)
+        for observed in self._displayable.get_dependencies():
+            try:
+                observed.register_observer(self)
+
+            except AttributeError:
+                pass
 
         if self._modifications is not None:
             for modification in modifications:
-                modification.register_observer(self)
-                for observed in modification._observing:
-                    observed.register_observer(self)
+                try:
+                    modification.register_observer(self)
+                except:
+                    pass
+
+                for observed in modification.get_dependencies():
+                    try:
+                        observed.register_observer(self)
+
+                    except:
+                        pass
 
         self.register_observer(self)
 
@@ -185,7 +197,7 @@ class ImageDisplay(InteractiveDisplay):
 
     def update_data(self):
         t = time.time()
-        self._data = self._displayable.get_tensor()
+        self._data = self._displayable.build()
 
         if self._modifications:
             for modification in self._modifications:

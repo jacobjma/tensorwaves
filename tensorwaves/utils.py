@@ -22,7 +22,7 @@ def batch_generator(n_items, max_batch_size):
 
 
 def log_grid(start, stop, n):
-    dt = tf.log(stop / start) / (n - 1)
+    dt = tf.math.log(stop / start) / (n - 1)
     return start * tf.exp(dt * tf.linspace(0., n - 1, n))
 
 
@@ -30,50 +30,31 @@ def complex_exponential(x):
     return tf.complex(tf.cos(x), tf.sin(x))
 
 
-def fourier_propagator(k, dz, wavelength):
-    """ Fourier space fresnel propagator """
-    x = -k * np.pi * wavelength * dz
-    return complex_exponential(x)
+def squared_norm(x, y):
+    return x[:, None] ** 2 + y[None, :] ** 2
+
+
+def angle(x, y):
+    return tf.atan2(x[:, None], y[None, :])
 
 
 def cell_is_rectangular(cell, tol=1e-12):
     return np.all(np.abs(cell[~np.eye(cell.shape[0], dtype=bool)]) < tol)
 
 
+def fourier_propagator(k, dz, wavelength):
+    x = -k * np.pi * wavelength * dz
+    return complex_exponential(x)
+
+
 def fft_shift(tensor, axes):
-    shift = [tensor.shape[axis].value // 2 for axis in axes]
-    return tf.manip.roll(tensor, shift, axes)
-
-
-class ProgressTracker(object):
-
-    def __init__(self, bars=None):
-        if bars is None:
-            bars = []
-
-        self._output = OrderedDict(zip(bars, [''] * len(bars)))
-
-    def add_bar(self, bar):
-        bar._tracker = self
-        self._output[bar] = ''
-
-    def notify(self, bar):
-        percentage = bar.get_percentage()
-        updated = False
-        if percentage != bar._last_update:
-            bar._last_update = percentage
-            self._output[bar] = bar.get_output(percentage)
-            updated = True
-
-        if updated:
-            for bar, bar_out in self._output.items():
-                print(bar_out)
-            clear_output(wait=True)
+    shift = [tensor.shape[axis] // 2 for axis in axes]
+    return tf.roll(tensor, shift, axes)
 
 
 class ProgressBar(object):
 
-    def __init__(self, num_iter, units='', description='', update_every=2, disable=False, tracker=None):
+    def __init__(self, num_iter, units='', description='', update_every=2, disable=False):
 
         self._num_iter = num_iter
         self._units = units
@@ -85,7 +66,6 @@ class ProgressBar(object):
         self._last_update = None
 
         self._i = 0
-        self._tracker = tracker
 
     def get_percentage(self):
         percentage = int((self._i + 1) / float(self._num_iter) * self._intervals) * self._update_every
@@ -97,16 +77,11 @@ class ProgressBar(object):
         return output
 
     def update(self, i):
-
         self._i = i
+        if not self._disable:
+            self.print()
 
-        if self._tracker:
-            self._tracker.notify(self)
-        else:
-            if not self._disable:
-                self._print()
-
-    def _print(self):
+    def print(self):
         percentage = self.get_percentage()
         if percentage != self._last_update:
             self._last_update = percentage
@@ -115,7 +90,7 @@ class ProgressBar(object):
             clear_output(wait=True)
 
 
-def bar(itrble, num_iter=None, **kwargs):
+def create_progress_bar(itrble, num_iter=None, **kwargs):
     '''Simple progress bar. '''
 
     if num_iter is None:
@@ -123,6 +98,7 @@ def bar(itrble, num_iter=None, **kwargs):
 
     progress_bar = ProgressBar(num_iter, **kwargs)
 
+    progress_bar.update(-1)
     for i, j in enumerate(itrble):
-        yield j
         progress_bar.update(i)
+        yield j

@@ -1,12 +1,12 @@
 import numpy as np
 
-from tensorwaves.bases import Tensor
+from tensorwaves.bases import TensorWithGrid
 
 
-class Image(Tensor):
+class Image(TensorWithGrid):
 
     def __init__(self, tensor, extent=None, sampling=None, space='direct'):
-        Tensor.__init__(self, tensor, extent=extent, sampling=sampling, space=space)
+        TensorWithGrid.__init__(self, tensor, extent=extent, sampling=sampling, space=space)
 
     # def get_normalization_factor(self):
     #     return tf.reduce_sum(self._tensor) * tf.reduce_prod(self.grid.sampling) * tf.cast(

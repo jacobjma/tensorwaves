@@ -6,17 +6,19 @@ from tensorwaves.transfer import PolarAberrations
 from tensorwaves.utils import complex_exponential
 
 
-class PrismCoefficients(HasEnergy, TensorFactory, Observable):
+class PrismCoefficients(TensorFactory, Observable):
 
-    def __init__(self, kx, ky, energy=None, save_tensor=True):
+    def __init__(self, kx, ky, save_tensor=True):
         self._kx = kx
         self._ky = ky
 
-        HasEnergy.__init__(self, energy=energy)
         TensorFactory.__init__(self, save_tensor=save_tensor)
         Observable.__init__(self)
 
         self.register_observer(self)
+
+    def check_is_defined(self):
+        pass
 
     @property
     def kx(self):
@@ -27,14 +29,64 @@ class PrismCoefficients(HasEnergy, TensorFactory, Observable):
         return self._ky
 
 
-class PrismAperture(PrismCoefficients):
+class PrismCustomCoefficient(PrismCoefficients):
+
+    def __init__(self, kx, ky, coeffiecients, save_tensor=True):
+        PrismCoefficients.__init__(self, kx=kx, ky=ky, save_tensor=save_tensor)
+        self._coefficients = coeffiecients
+
+    coefficients = notifying_property('_coeffiecients')
+
+
+def gaussian(r2, a, b):
+    return a * tf.exp(-r2 / (b ** 2))
+
+
+def gaussian_derivative(r, r2, a, b):
+    return - 2 * a * 1 / b ** 2 * r * tf.exp(-r2 / b ** 2)
+
+
+def soft_gaussian(r, r2, a, b, r_cut):
+    return gaussian(r2, a, b) - gaussian(r_cut ** 2, a, b) - (r - r_cut) * gaussian_derivative(r_cut, r_cut ** 2, a, b)
+
+
+class PrismGaussianAperture(HasEnergy, PrismCoefficients):
+
+    def __init__(self, kx, ky, amplitude=None, radius=None, energy=None, save_tensor=True):
+        self._radius = radius
+        self._amplitude = amplitude
+
+        PrismCoefficients.__init__(self, kx=kx, ky=ky, save_tensor=save_tensor)
+        HasEnergy.__init__(self, energy=energy)
+
+    radius = notifying_property('_radius')
+    amplitude = notifying_property('_amplitude')
+
+    def _calculate_tensor(self):
+        alpha_x = self.kx * self.wavelength
+        alpha_y = self.ky * self.wavelength
+
+        alpha2 = alpha_x ** 2 + alpha_y ** 2
+        alpha = tf.sqrt(alpha2)
+        alpha_cut = tf.reduce_max(alpha)
+
+        amplitude = tf.reshape(tf.constant(self._amplitude, dtype=tf.float32), (1, -1))
+        radius = tf.reshape(tf.constant(self._radius, dtype=tf.float32), (1, -1))
+
+        # print(gaussian(alpha2[:, None], amplitude, radius))
+        # tf.reduce_sum(soft_gaussian(alpha[:, None], alpha2[:, None], amplitude, radius, alpha_cut), axis=1)
+        return tf.reduce_sum(gaussian(alpha2[:, None], amplitude, radius), axis=1)
+
+
+class PrismAperture(HasEnergy, PrismCoefficients):
 
     def __init__(self, kx, ky, radius=np.inf, rolloff=0., energy=None, save_tensor=True):
 
         self._radius = radius
         self._rolloff = rolloff
 
-        PrismCoefficients.__init__(self, kx=kx, ky=ky, energy=energy, save_tensor=save_tensor)
+        PrismCoefficients.__init__(self, kx=kx, ky=ky, save_tensor=save_tensor)
+        HasEnergy.__init__(self, energy=energy)
 
     radius = notifying_property('_radius')
     rolloff = notifying_property('_rolloff')
@@ -56,7 +108,7 @@ class PrismAperture(PrismCoefficients):
         return tensor
 
 
-class PrismAberration(PrismCoefficients):
+class PrismAberration(HasEnergy, PrismCoefficients):
 
     def __init__(self, kx, ky, energy=None, save_tensor=True, parametrization='polar', **kwargs):
 
@@ -66,7 +118,8 @@ class PrismAberration(PrismCoefficients):
         else:
             raise RuntimeError()
 
-        PrismCoefficients.__init__(self, kx=kx, ky=ky, energy=energy, save_tensor=save_tensor)
+        PrismCoefficients.__init__(self, kx=kx, ky=ky, save_tensor=save_tensor)
+        HasEnergy.__init__(self, energy=energy)
 
         self._parametrization.register_observer(self)
 
@@ -93,9 +146,9 @@ class PrismAberration(PrismCoefficients):
 
 class PrismTranslate(PrismCoefficients):
 
-    def __init__(self, kx, ky, position=None, energy=None, save_tensor=True):
+    def __init__(self, kx, ky, position=None, save_tensor=True):
 
-        PrismCoefficients.__init__(self, kx=kx, ky=ky, energy=energy, save_tensor=save_tensor)
+        PrismCoefficients.__init__(self, kx=kx, ky=ky, save_tensor=save_tensor)
 
         if position is None:
             position = (0., 0.)

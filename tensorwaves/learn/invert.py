@@ -1,165 +1,218 @@
 import numpy as np
 import tensorflow as tf
 
-from tensorwaves.prism import PrismTranslate
-from tensorwaves.transfer import zernike2polar
-from tensorwaves.utils import complex_exponential
+from tensorwaves.transfer import PrismTranslate
 
 
-class DataGenerator(tf.keras.utils.Sequence):
-    def __init__(self, X, Y, batch_size=32, shuffle=True):
+class DataGenerator(object):
+    def __init__(self, positions, values, batch_size=32):
 
-        self.batch_size = batch_size
-        assert len(X) == len(Y)
-        self.X = X.copy()
-        self.Y = Y.copy()
-        self.shuffle = shuffle
-        self.on_epoch_end()
+        self._batch_size = batch_size
+
+        def generator(positions, values, batch_size):
+            num_iter = len(values) // batch_size
+            while True:
+                for i in range(num_iter):
+                    if i == 0:
+                        indices = np.arange(len(values))
+                        np.random.shuffle(indices)
+
+                    batch_indices = indices[i * batch_size:(i + 1) * batch_size]
+
+                    batch_values = values[batch_indices]
+                    batch_positions = positions[batch_indices]
+
+                    yield batch_indices, batch_positions, batch_values
+
+        self._gen = generator(positions, values, batch_size=batch_size)
+        self._length = len(values)
+        self._values = values
+        self._positions = positions
+
+    @property
+    def batch_size(self):
+        return self._batch_size
+
+    @property
+    def values(self):
+        return self._values
+
+    @property
+    def positions(self):
+        return self._values
 
     def __len__(self):
-        return int(np.floor(len(self.X) / self.batch_size))
+        return self._length
 
-    def __getitem__(self, batch_index):
-        # Generate indexes of the batch
-        batch_indices = self.indices[batch_index * self.batch_size:(batch_index + 1) * self.batch_size]
+    def __iter__(self):
+        return self._gen
 
-        if batch_index == len(self) - 1:
-            self.on_epoch_end()
-
-        return self.__data_generation(batch_indices)
-
-    def on_epoch_end(self):
-        self.indices = np.arange(len(self.X))
-        np.random.seed(1)
-        if self.shuffle == True:
-            np.random.shuffle(self.indices)
-
-    def __data_generation(self, batch_indices):
-        return self.X[batch_indices], self.Y[batch_indices], batch_indices
+    def __next__(self):
+        return next(self._gen)
 
 
-class Adam(object):
+def gaussian(r2, a, b):
+    return a * tf.exp(-r2 / (b ** 2))
 
-    def __init__(self, learning_rate, beta1=0.85, beta2=0.999, epsilon=1e-6):
-        self._beta1 = beta1
-        self._beta2 = beta2
-        self._epsilon = epsilon
-        self._learning_rate = learning_rate
 
-        self._i = 0
-        self._t = 0
+def gaussian_derivative(r, r2, a, b):
+    return - 2 * a * 1 / b ** 2 * r * tf.exp(-r2 / b ** 2)
 
-    def collect_grad(self, grad):
-        if self._i == 0:
-            self._grad = tf.zeros_like(grad)
 
-        self._grad += grad
-        self._i += 1
+def soft_gaussian(r, r2, a, b, r_cut):
+    return (gaussian(r2, a, b) - gaussian(r_cut ** 2, a, b) - (r - r_cut) *
+            gaussian_derivative(r_cut, r_cut ** 2, a, b))
 
-    def update(self, f):
-        if self._t == 0:
-            self._v = tf.zeros_like(f, dtype=tf.float32)
-            self._sqr = tf.zeros_like(f, dtype=tf.float32)
 
-        grad = self._grad / self._i
-        self._i = 0
-        self._t += 1
+def wrapped_slice(tensor, begin, size):
+    shift = [-x for x in begin]
+    tensor = tf.roll(tensor, shift, list(range(len(begin))))
+    return tf.slice(tensor, [0] * len(begin), size)
 
-        v = self._beta1 * self._v + (1. - self._beta1) * grad
-        sqr = self._beta2 * self._sqr + (1. - self._beta2) * tf.square(grad)
 
-        v_bias_corr = v / (1. - self._beta1 ** self._t)
-        sqr_bias_corr = sqr / (1. - self._beta2 ** self._t)
-        update = self._learning_rate * v_bias_corr / (tf.sqrt(sqr_bias_corr) + self._epsilon)
+class Killswitch(object):
 
-        f.assign_sub(update)
+    def __init__(self):
+        self.on = False
 
 
 class ProbeModel(object):
 
-    def __init__(self, S, detector):
+    def __init__(self, S, detector, scale, radius):
         self._S = S
-        self._detector = detector
 
+        detector.extent = S.probe_extent
+        detector.gpts = S.probe_gpts
+        detector.energy = S.energy
+
+        self._detector = detector.build().tensor()[0]
         self._translate = PrismTranslate(kx=S.kx, ky=S.ky)
 
-        aberrations = S.aberrations.parametrization.to_zernike(.035)
+        alpha_x = self.S.kx * self.S.wavelength
+        alpha_y = self.S.ky * self.S.wavelength
+        self._alpha2 = alpha_x ** 2 + alpha_y ** 2
 
-        alpha_x, alpha_y = S.alpha_x.numpy(), S.alpha_y.numpy()
-        alpha = np.sqrt(alpha_x ** 2 + alpha_y ** 2)
-        phi = np.arctan2(alpha_x, alpha_y)
+        self._scale = tf.Variable(scale, dtype=tf.float32)
+        self._radius = tf.Variable(radius, dtype=tf.float32)
+        self._losses = []
+        self._last_predictions = None
 
-        self._indices, self._basis, self._expansion = aberrations.expansion(alpha, phi)
+    @property
+    def S(self):
+        return self._S
 
-        self._expansion = tf.Variable(self._expansion)
-        self._scale = tf.Variable(tf.convert_to_tensor([1.], dtype=tf.float32))
-        self._shift = tf.Variable(tf.convert_to_tensor([0.], dtype=tf.float32))
+    @property
+    def translate(self):
+        return self._translate
 
     def get_coefficients(self):
-        chi = tf.reduce_sum(self._basis * self._expansion[:, None], axis=0)
-        coefficients = complex_exponential(- 2 * np.pi / self._S.wavelength * chi)
-        return coefficients
+        scale = self._scale
+        radius = tf.abs(self._radius)
+        return tf.reduce_sum(tf.cast(gaussian(self._alpha2[:, None], scale[None, :], radius[None, :]), tf.complex64),
+                             axis=1)
 
-    def get_probe(self):
-        self._translate.position = (0., 0.)
-        coefficients = self._translate.get_tensor() * self.get_coefficients()
-        return tf.abs(tf.reduce_sum(
-            self._S._tensorflow * coefficients[:, None, None] *
-            tf.cast(self._S.aperture.get_tensor()[:, None, None], dtype=tf.complex64), axis=0)) ** 2
+    def get_probe(self, position, coefficients):
 
-    def evaluate_loss(self, x, y):
-        y_predict = self.predict(x)  # * self._linear_transform[0] + self._linear_transform[1]
-        return tf.square(y_predict - y), y_predict
+        # begin = [
+        #     np.round((position[0] - self.S.extent[0] / (2 * self.S.interpolation)) /
+        #              self.S.sampling[0]).astype(int),
+        #     np.round((position[1] - self.S.extent[1] / (2 * self.S.interpolation)) /
+        #              self.S.sampling[1]).astype(int)
+        # ]
+        #
+        # size = [0,
+        #     np.ceil(self.S.gpts[0] / self.S.interpolation).astype(int),
+        #     np.ceil(self.S.gpts[1] / self.S.interpolation).astype(int)
+        # ]
 
-    def predict(self, x):
-        self._translate.position = x
-        coefficients = self._translate.get_tensor() * self.get_coefficients()
+        # tensor = self.S._expansion[
+        #          :,
+        #          begin[0]:begin[0] + size[0],
+        #          begin[1]:begin[1] + size[1]
+        #          ]
+        begin = [0,
+                 np.round((position[0] - self.S.extent[0] / (2 * self.S.interpolation)) /
+                          self.S.sampling[0]).astype(int),
+                 np.round((position[1] - self.S.extent[1] / (2 * self.S.interpolation)) /
+                          self.S.sampling[1]).astype(int)]
 
-        # print(self._S.aperture.get_tensor())
+        size = [self.S.kx.shape[0],
+                np.ceil(self.S.gpts[0] / self.S.interpolation).astype(int),
+                np.ceil(self.S.gpts[1] / self.S.interpolation).astype(int)]
 
-        probe = tf.reduce_sum(
-            self._S._tensorflow * coefficients[:, None, None] *
-            tf.cast(self._S.aperture.get_tensor()[:, None, None], dtype=tf.complex64), axis=0)
+        tensor = wrapped_slice(self.S._expansion, begin, size)
 
-        diffraction = tf.abs(tf.fft2d(probe)) ** 2
-        y_predict = tf.reduce_sum(diffraction * self._detector.get_tensor()) / tf.reduce_sum(diffraction)
-        return y_predict
+        # tensor = self.S._expansion[
+        #          :,
+        #          begin[0]:begin[0] + size[0],
+        #          begin[1]:begin[1] + size[1]
+        #          ]
 
-    def fit_generator(self, data_generator, num_epochs, learning_rate, callback=None):
+        self.translate.positions = position
 
-        expansion_optimizer = Adam(learning_rate)
-        # scale_optimizer = Adam(.1)
+        probe = tf.reduce_sum(tensor * (self.translate.tensor() * coefficients)[:, None, None], axis=0)
 
-        for i, (X_batch, Y_batch, batch_indices) in enumerate(data_generator):
-            batch_predict = tf.zeros([data_generator.batch_size, 1])
-            batch_y = tf.zeros([data_generator.batch_size, 1])
+        return probe
 
-            with tf.GradientTape() as tape:
-                for j, (x, y, index) in enumerate(zip(X_batch, Y_batch, batch_indices)):
-                    y_predict = self.predict(x)  # * self._scale  # - mean_old
-                    batch_predict += tf.scatter_nd([[j]], y_predict[None, None], batch_predict.shape)
-                    batch_y += tf.scatter_nd([[j]], tf.convert_to_tensor(y)[None, None], batch_predict.shape)
+    def predict(self, position, coefficients):
+        probe = self.get_probe(position, coefficients)
 
-                mean, var = tf.nn.moments(batch_predict, axes=[0, 1])
-                batch_predict = (batch_predict - mean) / tf.sqrt(var)
+        diffraction = tf.abs(tf.signal.fft2d(probe)) ** 2
+        y_predict = tf.reduce_sum(tf.boolean_mask(diffraction, self._detector))
 
-                #mean, var = tf.nn.moments(batch_y, axes=[0, 1])
-                #batch_y = (batch_y - mean) / tf.sqrt(var)
+        return y_predict / tf.reduce_sum(diffraction)
 
-                batch_loss = tf.reduce_sum(tf.square(batch_predict - batch_y))
+    def fit_generator(self, data_generator, num_epochs, optimizers, max_position=None, callback=None, killswitch=None):
 
-            expansion_grad = tape.gradient(batch_loss, [self._expansion, ])  # self._scale])
+        steps_per_epoch = len(data_generator)
 
-            expansion_optimizer.collect_grad(expansion_grad)
-            # scale_optimizer.collect_grad(scale_grad)
-            # shift_optimizer.collect_grad(shift_grad)
+        self._last_predictions = np.zeros(len(data_generator))
 
-            expansion_optimizer.update(self._expansion)
-            # scale_optimizer.update(self._scale)
-            # shift_optimizer.update(self._shift)
+        for epoch in range(num_epochs):
+            epoch_loss = 0.
 
-            if callback is not None:
-                expansion = dict(zip(self._indices, list(self._expansion.numpy())))
-                expansion = zernike2polar(expansion, .035)
-                callback.on_batch_end(i, y_predict, batch_loss, batch_indices, self.get_probe().numpy(), expansion,
-                                      self._scale.numpy(), self._shift.numpy())
+            for i in range(steps_per_epoch):
+                indices, X_batch, Y_batch = next(data_generator)
+
+                with tf.GradientTape() as tape:
+                    batch_loss = 0.
+                    coefficients = self.get_coefficients()
+
+                    max_value = self.predict(max_position, coefficients)
+                    # print(max_value)
+
+                    for j, (x, y) in enumerate(zip(X_batch, Y_batch)):
+                        y_predict = self.predict(x, coefficients) / max_value
+                        batch_loss += tf.reduce_sum(tf.square(y - y_predict))
+                        self._last_predictions[indices[j]] = y_predict
+
+                    batch_loss /= len(X_batch)
+
+                epoch_loss += batch_loss
+                # running_mean = epoch_loss / ((i + 1) * data_generator.batch_size)
+
+                self._losses.append(batch_loss)
+
+                grads = tape.gradient(batch_loss, [self._scale, self._radius])
+
+                clip = .01 / optimizers[0].learning_rate
+                grads[0] = tf.clip_by_value(grads[0], -clip, clip)
+
+                clip = .0001 / optimizers[1].learning_rate
+                grads[1] = tf.clip_by_value(grads[1], -clip, clip)
+
+                optimizers[0].apply_gradients(zip([grads[0]], [self._scale]))
+                optimizers[1].apply_gradients(zip([grads[1]], [self._radius]))
+
+                #fwhm = get_fwhm(p[p.shape[0] // 2], self.S.probe_extent[1])
+
+                #print('Step: {}, Batch loss: {:.3e}, FWHM: {:.3f}'.format(i, batch_loss, fwhm))
+
+                if callback is not None:
+                    callback.on_batch_end()
+
+                if killswitch is not None:
+                    if killswitch.on:
+                        return
+
+                # clear_output(wait=True)

@@ -2,6 +2,7 @@ import itertools
 
 import numpy as np
 from ase import Atoms
+from ase.lattice.hexagonal import Graphite
 from scipy.spatial import Voronoi
 
 from tensorwaves.learn.augment import bandpass_noise_2d
@@ -40,20 +41,18 @@ def repeat_positions(positions, box):
     return new_positions
 
 
-def lloyds_relaxation(atoms, num_iter=1, bc='periodic', wrap=True):
-    def mirror(positions, box):
-        new_positions = positions.copy()
+def mirror_positions(positions, box):
+    new_positions = positions.copy()
 
-        for i, j in zip([0, 0, 1, 1], [2, 0, 2, 0]):
-            tmp_positions = positions.copy()
-            tmp_positions[:, i] = j * np.array(box)[i] - tmp_positions[:, i]
-            new_positions = np.concatenate((new_positions, tmp_positions))
+    for i, j in zip([0, 0, 1, 1], [2, 0, 2, 0]):
+        tmp_positions = positions.copy()
+        tmp_positions[:, i] = j * np.array(box)[i] - tmp_positions[:, i]
+        new_positions = np.concatenate((new_positions, tmp_positions))
 
-        return new_positions
+    return new_positions
 
-    positions = atoms.get_positions()[:, :2]
-    box = np.diag(atoms.get_cell())[:2]
 
+def _lloyds_relaxation(positions, box, num_iter=1, bc='periodic', wrap=True):
     N = len(positions)
 
     for i in range(num_iter):
@@ -61,7 +60,7 @@ def lloyds_relaxation(atoms, num_iter=1, bc='periodic', wrap=True):
             if bc == 'periodic':
                 positions = repeat_positions(positions, box)
             elif bc == 'mirror':
-                positions = mirror(positions, box)
+                positions = mirror_positions(positions, box)
             else:
                 raise NotImplementedError('Boundary condition {0} not recognized'.format(bc))
 
@@ -71,7 +70,13 @@ def lloyds_relaxation(atoms, num_iter=1, bc='periodic', wrap=True):
         if wrap:
             positions[:, 0] = positions[:, 0] % box[0]
             positions[:, 1] = positions[:, 1] % box[1]
+    return positions
 
+
+def lloyds_relaxation(atoms, num_iter=1, bc='periodic', wrap=True):
+    positions = atoms.get_positions()[:, :2]
+    box = np.diag(atoms.get_cell())[:2]
+    positions = _lloyds_relaxation(positions, box, num_iter=num_iter, bc=bc, wrap=wrap)
     atoms.set_positions(np.hstack((positions, atoms.get_positions()[:, 2, None])))
     return atoms
 
@@ -142,6 +147,38 @@ def grains(box, centers, sheet_funcs, p=1):
     return atoms
 
 
+def convexHull(pts):
+    xleftmost, yleftmost = min(pts)
+    by_theta = [(np.arctan2(x - xleftmost, y - yleftmost), x, y) for x, y in pts]
+    by_theta.sort()
+    as_complex = [complex(x, y) for _, x, y in by_theta]
+    chull = as_complex[:2]
+    for pt in as_complex[2:]:
+        while ((pt - chull[-1]).conjugate() * (chull[-1] - chull[-2])).imag < 0:
+            chull.pop()
+        chull.append(pt)
+    return [(pt.real, pt.imag) for pt in chull]
+
+
+def dft(xs):
+    return [sum(x * np.exp(2j * np.pi * i * k / len(xs))
+                for i, x in enumerate(xs))
+            for k in range(len(xs))]
+
+
+def interpolateSmoothly(xs, N):
+    """For each point, add N points."""
+    fs = dft(xs)
+    half = (len(xs) + 1) // 2
+    fs2 = fs[:half] + [0] * (len(fs) * N) + fs[half:]
+    return [x.real / len(xs) for x in dft(fs2)[::-1]]
+
+
+def blob():
+    pts = convexHull([(np.random.rand(), np.random.rand()) for _ in range(5)])
+    return np.array([interpolateSmoothly(zs, 5) for zs in zip(*pts)]).T
+
+
 def random_strain(atoms, direction, amplitude, scale, gpts=(32, 32)):
     positions = atoms.get_positions()
     cell = np.diag(atoms.get_cell())
@@ -157,4 +194,56 @@ def random_strain(atoms, direction, amplitude, scale, gpts=(32, 32)):
 
     positions[:, direction] += amplitude * np.array([lookup_nearest(p[0], p[1], x, y, noise) for p in positions]).T
     atoms.set_positions(positions)
+    return atoms
+
+
+def pseudo_graphene(box):
+    n = int(2 / (2.46 * 4.261) * box[0] * box[1])
+
+    positions = np.array([[np.random.uniform(0, l) for l in box[:2]] + [0.] for i in range(n)])
+    atoms = Atoms(['C'] * len(positions), positions=positions, cell=box)
+    atoms = lloyds_relaxation(atoms, 20)
+
+    positions = atoms.get_positions()[:, :2]
+    positions = repeat_positions(positions, box[:2])
+    vor = Voronoi(positions)
+    vertices = vor.vertices
+
+    vertices = vertices[vertices[:, 0] > 0.]
+    vertices = vertices[vertices[:, 1] > 0.]
+    vertices = vertices[vertices[:, 0] < box[0]]
+    vertices = vertices[vertices[:, 1] < box[1]]
+
+    positions = np.pad(vertices, (0, 1), mode='constant')
+    atoms = Atoms(['C'] * len(positions), positions=positions, cell=box)
+    atoms = lloyds_relaxation(atoms, 1)
+    atoms.center()
+    return atoms
+
+
+def random_graphene_sheet(box, edge_tol=.1):
+    rotation = np.random.rand() * 360
+    atoms = Graphite(symbol='C', latticeconstant={'a': 2.46, 'c': 6.70},
+                     directions=[[1, -2, 1, 0], [2, 0, -2, 0], [0, 0, 0, 1]], size=(1, 1, 1))
+
+    del atoms[atoms.get_positions()[:, 2] < 2]
+
+    diagonal = np.hypot(box[0], box[1]) * 2
+    n = np.ceil(diagonal / atoms.get_cell()[0, 0]).astype(int)
+    m = np.ceil(diagonal / atoms.get_cell()[1, 1]).astype(int)
+
+    atoms *= (n, m, 1)
+
+    atoms.set_cell(box)
+    atoms.rotate(rotation, 'z')
+    atoms.center()
+
+    del atoms[atoms.get_positions()[:, 0] < edge_tol]
+    del atoms[atoms.get_positions()[:, 0] > box[0] - edge_tol]
+    del atoms[atoms.get_positions()[:, 1] < edge_tol]
+    del atoms[atoms.get_positions()[:, 1] > box[1] - edge_tol]
+
+    atoms = lloyds_relaxation(atoms, 1)
+    atoms.center()
+
     return atoms

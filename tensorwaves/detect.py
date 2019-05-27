@@ -1,7 +1,7 @@
 import numpy as np
 import tensorflow as tf
 
-from tensorwaves.bases import TensorFactory, HasGrid, HasEnergy, notifying_property, TensorWithEnergy
+from tensorwaves.bases import TensorFactory, HasGrid, HasGridAndEnergy, notifying_property, TensorWithGridAndEnergy
 from tensorwaves.image import Image
 from tensorwaves.transfer import squared_norm
 
@@ -14,34 +14,12 @@ class Detector(HasGrid):
     def detect(self, wave):
         raise NotImplementedError()
 
-    def match(self, other):
-        try:
-            self._grid.match(other._grid)
-        except AttributeError:
-            pass
 
-
-class DetectorWithEnergy(Detector, HasEnergy):
+class DetectorWithEnergy(HasGridAndEnergy, Detector):
 
     def __init__(self, extent=None, gpts=None, sampling=None, energy=None):
-        Detector.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
-        HasEnergy.__init__(self, energy=energy)
-
-    def semiangles(self):
-        kx, ky = self._grid.fftfreq()
-        wavelength = self.wavelength
-        return kx * wavelength, ky * wavelength
-
-    def match(self, other):
-        try:
-            self._grid.match(other._grid)
-        except AttributeError:
-            pass
-
-        try:
-            self._energy.match(other._energy)
-        except AttributeError:
-            pass
+        Detector.__init__(self)
+        HasGridAndEnergy.__init__(self, extent=extent, gpts=gpts, sampling=sampling, energy=energy)
 
 
 class RingDetector(DetectorWithEnergy, TensorFactory):
@@ -76,16 +54,16 @@ class RingDetector(DetectorWithEnergy, TensorFactory):
             tensor = tensor_inner * tensor_outer
 
         else:
-            tensor = tf.cast((alpha > self._inner) & (alpha < self._outer), tf.float32)
+            tensor = tf.cast((alpha >= self._inner) & (alpha <= self._outer), tf.float32)
 
-        return TensorWithEnergy(tensor[None], extent=self.extent, energy=self.energy, space='fourier')
+        return TensorWithGridAndEnergy(tensor[None], extent=self.extent, energy=self.energy, space='fourier')
 
     def detect(self, wave):
-        self.match(wave)
+        self.match_grid_and_energy(wave)
 
-        intensity = tf.abs(tf.signal.fft2d(wave.tensorflow())) ** 2
+        intensity = tf.abs(tf.signal.fft2d(wave.tensor())) ** 2
 
         if self._integrate:
-            return tf.reduce_sum(intensity * self.get_tensor().tensorflow(), axis=(1, 2)) / tf.reduce_sum(intensity, axis=(1, 2))
+            return tf.reduce_sum(intensity * self.build().tensor(), axis=(1, 2)) / tf.reduce_sum(intensity, axis=(1, 2))
         else:
             return Image(intensity, extent=wave.grid.extent)
