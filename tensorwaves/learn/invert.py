@@ -51,6 +51,10 @@ class DataGenerator(object):
         return next(self._gen)
 
 
+def decaying_exponential(r2, a, b):
+    return a * tf.exp(-tf.sqrt(r2) / (b ** 2))
+
+
 def gaussian(r2, a, b):
     return a * tf.exp(-r2 / (b ** 2))
 
@@ -108,8 +112,16 @@ class ProbeModel(object):
     def get_coefficients(self):
         scale = self._scale
         radius = tf.abs(self._radius)
-        return tf.reduce_sum(tf.cast(gaussian(self._alpha2[:, None], scale[None, :], radius[None, :]), tf.complex64),
-                             axis=1)
+
+        coefficients = tf.reduce_sum(
+            tf.cast(gaussian(self._alpha2[:, None], scale[None, :2], radius[None, :2]), tf.complex64),
+            axis=1)
+
+        coefficients += tf.reduce_sum(
+            tf.cast(gaussian(self._alpha2[:, None], scale[None, 2:], radius[None, 2:]), tf.complex64),
+            axis=1)
+
+        return coefficients
 
     def get_probe(self, position, coefficients):
 
@@ -162,7 +174,8 @@ class ProbeModel(object):
 
         return y_predict / tf.reduce_sum(diffraction)
 
-    def fit_generator(self, data_generator, num_epochs, optimizers, max_position=None, callback=None, killswitch=None):
+    def fit_generator(self, data_generator, num_epochs, optimizers, min_position=None, max_position=None, callback=None,
+                      killswitch=None):
 
         steps_per_epoch = len(data_generator)
 
@@ -179,10 +192,15 @@ class ProbeModel(object):
                     coefficients = self.get_coefficients()
 
                     max_value = self.predict(max_position, coefficients)
+                    min_value = self.predict(min_position, coefficients)
+
                     # print(max_value)
 
                     for j, (x, y) in enumerate(zip(X_batch, Y_batch)):
-                        y_predict = self.predict(x, coefficients) / max_value
+                        # y_predict = self.predict(x, coefficients) / max_value
+
+                        y_predict = (self.predict(x, coefficients) - min_value) / (max_value - min_value)
+
                         batch_loss += tf.reduce_sum(tf.square(y - y_predict))
                         self._last_predictions[indices[j]] = y_predict
 
@@ -204,9 +222,9 @@ class ProbeModel(object):
                 optimizers[0].apply_gradients(zip([grads[0]], [self._scale]))
                 optimizers[1].apply_gradients(zip([grads[1]], [self._radius]))
 
-                #fwhm = get_fwhm(p[p.shape[0] // 2], self.S.probe_extent[1])
+                # fwhm = get_fwhm(p[p.shape[0] // 2], self.S.probe_extent[1])
 
-                #print('Step: {}, Batch loss: {:.3e}, FWHM: {:.3f}'.format(i, batch_loss, fwhm))
+                # print('Step: {}, Batch loss: {:.3e}, FWHM: {:.3f}'.format(i, batch_loss, fwhm))
 
                 if callback is not None:
                     callback.on_batch_end()

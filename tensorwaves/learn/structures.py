@@ -1,249 +1,278 @@
-import itertools
-
-import numpy as np
 from ase import Atoms
-from ase.lattice.hexagonal import Graphite
-from scipy.spatial import Voronoi
-
-from tensorwaves.learn.augment import bandpass_noise_2d
+import numpy as np
 
 
-def voronoi_centroids(points):
-    def area_centroid(points):
-        points = np.vstack((points, points[0]))
-        A = 0
-        C = np.zeros(2)
-        for i in range(0, len(points) - 1):
-            s = points[i, 0] * points[i + 1, 1] - points[i + 1, 0] * points[i, 1]
-            A = A + s
-            C = C + (points[i, :] + points[i + 1, :]) * s
-        return (1 / (3. * A)) * C
+def wrap_positions(positions, cell, center=(0.5, 0.5), eps=1e-7):
+    if not hasattr(center, '__len__'):
+        center = (center,) * 2
 
-    vor = Voronoi(points)
+    shift = np.asarray(center) - 0.5 - eps
 
-    centroids = []
+    fractional = np.linalg.solve(cell.T,
+                                 np.asarray(positions).T).T - shift
 
-    for i, point in enumerate(points):
-        if all(np.array(vor.regions[vor.point_region[i]]) > -1):
-            vertices = vor.vertices[vor.regions[vor.point_region[i]]]
-            centroids.append(area_centroid(vertices))
+    for i in range(2):
+        fractional[:, i] %= 1.0
+        fractional[:, i] += shift[i]
 
-    return np.array(centroids)
+    return np.dot(fractional, cell)
 
 
-def repeat_positions(positions, box):
-    new_positions = positions.copy()
-
-    for direction in set(itertools.combinations([-1, 0, 1] * 2, 2)):
-        if direction != (0, 0):
-            new_positions = np.concatenate((new_positions, positions + direction * np.array(box)))
-
-    return new_positions
+def hexagonal_to_rectangular(sites):
+    sites *= (2, 2)
+    sites.set_cell([sites.cell[0, 0], sites.cell[1, 1]])
+    return sites
 
 
-def mirror_positions(positions, box):
-    new_positions = positions.copy()
-
-    for i, j in zip([0, 0, 1, 1], [2, 0, 2, 0]):
-        tmp_positions = positions.copy()
-        tmp_positions[:, i] = j * np.array(box)[i] - tmp_positions[:, i]
-        new_positions = np.concatenate((new_positions, tmp_positions))
-
-    return new_positions
-
-
-def _lloyds_relaxation(positions, box, num_iter=1, bc='periodic', wrap=True):
-    N = len(positions)
-
-    for i in range(num_iter):
-        if box is not None:
-            if bc == 'periodic':
-                positions = repeat_positions(positions, box)
-            elif bc == 'mirror':
-                positions = mirror_positions(positions, box)
-            else:
-                raise NotImplementedError('Boundary condition {0} not recognized'.format(bc))
-
-        centroids = voronoi_centroids(positions)
-        positions = centroids[:N]
-
-        if wrap:
-            positions[:, 0] = positions[:, 0] % box[0]
-            positions[:, 1] = positions[:, 1] % box[1]
-    return positions
-
-
-def lloyds_relaxation(atoms, num_iter=1, bc='periodic', wrap=True):
-    positions = atoms.get_positions()[:, :2]
-    box = np.diag(atoms.get_cell())[:2]
-    positions = _lloyds_relaxation(positions, box, num_iter=num_iter, bc=bc, wrap=wrap)
-    atoms.set_positions(np.hstack((positions, atoms.get_positions()[:, 2, None])))
-    return atoms
-
-
-def hexagonal2orthogonal(atoms):
-    atoms = atoms.repeat((1, 2, 1))
-    cell = atoms.get_cell()
-    cell[1, 0] = 0
-    atoms.set_cell(cell)
-    atoms.wrap()
-    return atoms
-
-
-def fill_box_2d(atoms, box, rotation):
+def fill_box(sites, box, rotation=0.):
     diagonal = np.hypot(box[0], box[1]) * 2
-    n = np.ceil(diagonal / atoms.get_cell()[0, 0]).astype(int)
-    m = np.ceil(diagonal / atoms.get_cell()[1, 1]).astype(int)
+    n = np.ceil(diagonal / sites.cell[0, 0]).astype(int)
+    m = np.ceil(diagonal / sites.cell[1, 1]).astype(int)
 
-    atoms *= (n, m, 1)
+    sites *= (n, m, 1)
 
-    atoms.set_cell(box)
-    atoms.rotate(rotation, 'z')
-    atoms.center()
+    sites.set_cell(box)
+    sites.rotate(rotation)
+    sites.center()
 
-    del atoms[atoms.get_positions()[:, 0] < 0]
-    del atoms[atoms.get_positions()[:, 0] > box[0]]
-    del atoms[atoms.get_positions()[:, 1] < 0]
-    del atoms[atoms.get_positions()[:, 1] > box[1]]
-    return atoms
-
-
-def grains(box, centers, sheet_funcs, p=1):
-    def mirror(points, box):
-        original = points.copy()
-
-        for i, j in zip([0, 0, 1, 1], [2, 0, 2, 0]):
-            new_points = original.copy()
-            new_points[:, i] = j * np.array(box)[i] - new_points[:, i]
-            points = np.concatenate((points, new_points))
-
-        return points
-
-    def in_hull(p, hull):
-        from scipy.spatial import Delaunay
-        if not isinstance(hull, Delaunay):
-            hull = Delaunay(hull)
-
-        return hull.find_simplex(p) >= 0
-
-    centers = mirror(centers, box)
-
-    vor = Voronoi(centers)
-    atoms = Atoms()
-    for i, center in enumerate(centers):
-
-        if (center[0] > 0) & (center[1] > 0) & (center[0] < box[0]) & (center[1] < box[1]):
-            region = vor.vertices[vor.regions[vor.point_region[i]]]
-
-            sheet_func = np.random.choice(sheet_funcs, p=p)
-            new_atoms = sheet_func(box)
-
-            new_atoms = new_atoms[in_hull(new_atoms.get_positions()[:, :2], region)]
-            atoms += new_atoms
-
-    atoms.set_cell(box)
-    atoms.set_pbc(1)
-    atoms.wrap()
-    return atoms
+    del sites[sites.x < 0]
+    del sites[sites.x > box[0]]
+    del sites[sites.y < 0]
+    del sites[sites.y > box[1]]
+    return sites
 
 
-def convexHull(pts):
-    xleftmost, yleftmost = min(pts)
-    by_theta = [(np.arctan2(x - xleftmost, y - yleftmost), x, y) for x, y in pts]
-    by_theta.sort()
-    as_complex = [complex(x, y) for _, x, y in by_theta]
-    chull = as_complex[:2]
-    for pt in as_complex[2:]:
-        while ((pt - chull[-1]).conjugate() * (chull[-1] - chull[-2])).imag < 0:
-            chull.pop()
-        chull.append(pt)
-    return [(pt.real, pt.imag) for pt in chull]
+class SuperCell(object):
+
+    def __init__(self, positions=None, cell=None, arrays=None):
+
+        if positions is None:
+            positions = np.zeros((0, 2), dtype=np.float)
+
+        if cell is None:
+            self.set_cell(np.zeros((2, 2), dtype=np.float))
+
+        else:
+            self.set_cell(np.array(cell, dtype=np.float))
+
+        if arrays is None:
+            self._arrays = {}
+
+        else:
+            self._arrays = arrays
+
+        self._arrays['positions'] = positions
+
+    @property
+    def arrays(self):
+        return self._arrays
+
+    @property
+    def x(self):
+        return self.positions[:, 0]
+
+    @property
+    def y(self):
+        return self.positions[:, 1]
+
+    @property
+    def positions(self):
+        return self._arrays['positions']
+
+    @positions.setter
+    def positions(self, value):
+        self._arrays['positions'] = value
+
+    @property
+    def cell(self):
+        return self._cell
+
+    @cell.setter
+    def cell(self, value):
+        self.set_cell(value)
+
+    def set_cell(self, cell):
+
+        cell = np.array(cell)
+
+        if cell.shape == (2,):
+            cell = np.diag(cell)
+
+        assert cell.shape == (2, 2)
+
+        self._cell = cell
+
+    def __len__(self):
+        return len(self.positions)
+
+    def __add__(self, other):
+        atoms = self.copy()
+        atoms += other
+        return atoms
+
+    def __delitem__(self, i):
+
+        if isinstance(i, list) and len(i) > 0:
+            # Make sure a list of booleans will work correctly and not be
+            # interpreted at 0 and 1 indices.
+            i = np.array(i)
+
+        mask = np.ones(len(self), bool)
+        mask[i] = False
+        for name, a in self.arrays.items():
+            self._arrays[name] = a[mask]
+
+    def extend(self, other):
+        n1 = len(self)
+        n2 = len(other)
+
+        for name, a1 in self.arrays.items():
+            a = np.zeros((n1 + n2,) + a1.shape[1:], a1.dtype)
+            a[:n1] = a1
+            a2 = other.arrays.get(name)
+            if a2 is None:
+                raise RuntimeError('non-existent array {} in other'.format(name))
+
+        return self
+
+    __iadd__ = extend
+
+    def __imul__(self, m):
+        if isinstance(m, int):
+            m = (m, m)
+
+        n = len(self)
+
+        for name, a in self.arrays.items():
+            self._arrays[name] = np.tile(a, (np.product(m),) + (1,) * (len(a.shape) - 1))
+
+        positions = self.arrays['positions']
+
+        i0 = 0
+        for m0 in range(m[0]):
+            for m1 in range(m[1]):
+                i1 = i0 + n
+                positions[i0:i1] += np.dot((m0, m1), self.cell)
+                i0 = i1
+
+        self._cell = np.array([m[c] * self.cell[c] for c in range(2)])
+
+        return self
+
+    def repeat(self, rep):
+        atoms = self.copy()
+        atoms *= rep
+        return atoms
+
+    __mul__ = repeat
+
+    def wrap(self):
+        self.arrays['positions'][:] = wrap_positions(self.positions, self.cell)
+
+    def center(self):
+        self.arrays['positions'][:] = (self.arrays['positions'][:] -
+                                       np.mean(self.arrays['positions'][:], axis=0) +
+                                       np.sum(self.cell, axis=1) / 2)
+
+    def rotate(self, angle, center=None):
+
+        if center is None:
+            center = np.sum(self.cell, axis=1) / 2
+
+        angle = angle / 180. * np.pi
+
+        R = np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
+
+        self.arrays['positions'][:] = np.dot(R, self.positions.T - np.array(center)[:, None]).T
+
+    def copy(self):
+        arrays = {key: value.copy() for key, value in self.arrays.items()}
+        positions = arrays['positions']
+        del arrays['positions']
+        return self.__class__(positions=positions, cell=self._cell.copy(), arrays=arrays)
 
 
-def dft(xs):
-    return [sum(x * np.exp(2j * np.pi * i * k / len(xs))
-                for i, x in enumerate(xs))
-            for k in range(len(xs))]
+class Label(object):
+
+    def __init__(self, positions=None, structure_classes=None, cell=None):
+        if structure_classes is None:
+            structure_classes = np.zeros(len(positions), dtype=np.int)
+
+        assert len(positions) == len(structure_classes)
+
+        self._positions = np.array(positions)
+        arrays = {'structure_classes': np.array(structure_classes)}
+
+        super().__init__(positions=positions, arrays=arrays, cell=cell)
+
+    @property
+    def structure_classes(self):
+        return self._arrays['structure_classes']
+
+    def copy(self):
+        positions = self.arrays['positions'].copy()
+        structure_classes = self.arrays['structure_classes'].copy()
+        return self.__class__(positions=positions, structure_classes=structure_classes, cell=self.cell.copy())
 
 
-def interpolateSmoothly(xs, N):
-    """For each point, add N points."""
-    fs = dft(xs)
-    half = (len(xs) + 1) // 2
-    fs2 = fs[:half] + [0] * (len(fs) * N) + fs[half:]
-    return [x.real / len(xs) for x in dft(fs2)[::-1]]
+class Site(object):
+
+    def __init__(self, structures, probabilities=None, flip=False):
+
+        if probabilities is not None:
+            assert len(structures) == len(probabilities)
+            self._probabilities = np.array(probabilities) / np.sum(probabilities)
+
+        elif len(structures) == 1:
+            self._probabilities = None
+
+        else:
+            self._probabilities = np.full(len(structures), 1. / len(structures))
+
+        self._structures = structures
+
+        self._flip = flip
+
+    def choose(self):
+        i = np.random.choice(np.arange(len(self._structures)), 1, p=self._probabilities)[0]
+
+        structure = self._structures[i]
+
+        if self._flip:
+            if np.random.rand() < .5:
+                positions = structure.positions
+                positions[:,2] = -positions[:,2]
+                structure.positions = positions
+
+        return structure
 
 
-def blob():
-    pts = convexHull([(np.random.rand(), np.random.rand()) for _ in range(5)])
-    return np.array([interpolateSmoothly(zs, 5) for zs in zip(*pts)]).T
+class Sites(SuperCell):
 
+    def __init__(self, sites=None, positions=None, cell=None):
+        if sites is None:
+            sites = []
 
-def random_strain(atoms, direction, amplitude, scale, gpts=(32, 32)):
-    positions = atoms.get_positions()
-    cell = np.diag(atoms.get_cell())
+        arrays = {'sites': np.array(sites)}
 
-    def lookup_nearest(x0, y0, x, y, z):
-        xi = np.abs(x - x0).argmin()
-        yi = np.abs(y - y0).argmin()
-        return z[yi, xi]
+        super().__init__(positions=positions, cell=cell, arrays=arrays)
 
-    noise = bandpass_noise_2d(inner=0, outer=scale, shape=gpts)
-    x = np.linspace(0, cell[0], gpts[0])
-    y = np.linspace(0, cell[1], gpts[1])
+    @property
+    def sites(self):
+        return self.arrays['sites']
 
-    positions[:, direction] += amplitude * np.array([lookup_nearest(p[0], p[1], x, y, noise) for p in positions]).T
-    atoms.set_positions(positions)
-    return atoms
+    def as_atoms(self):
 
+        cell = np.zeros((3, 3))
 
-def pseudo_graphene(box):
-    n = int(2 / (2.46 * 4.261) * box[0] * box[1])
+        cell[:2, :2] = self.cell
 
-    positions = np.array([[np.random.uniform(0, l) for l in box[:2]] + [0.] for i in range(n)])
-    atoms = Atoms(['C'] * len(positions), positions=positions, cell=box)
-    atoms = lloyds_relaxation(atoms, 20)
+        combined_atoms = Atoms(cell=cell)
+        for site, position in zip(self.sites, self.positions):
+            atoms = site.choose().copy()
+            atoms.positions[:, :2] += position
+            combined_atoms += atoms
 
-    positions = atoms.get_positions()[:, :2]
-    positions = repeat_positions(positions, box[:2])
-    vor = Voronoi(positions)
-    vertices = vor.vertices
+        combined_atoms.center(axis=2, vacuum=2)
 
-    vertices = vertices[vertices[:, 0] > 0.]
-    vertices = vertices[vertices[:, 1] > 0.]
-    vertices = vertices[vertices[:, 0] < box[0]]
-    vertices = vertices[vertices[:, 1] < box[1]]
-
-    positions = np.pad(vertices, (0, 1), mode='constant')
-    atoms = Atoms(['C'] * len(positions), positions=positions, cell=box)
-    atoms = lloyds_relaxation(atoms, 1)
-    atoms.center()
-    return atoms
-
-
-def random_graphene_sheet(box, edge_tol=.1):
-    rotation = np.random.rand() * 360
-    atoms = Graphite(symbol='C', latticeconstant={'a': 2.46, 'c': 6.70},
-                     directions=[[1, -2, 1, 0], [2, 0, -2, 0], [0, 0, 0, 1]], size=(1, 1, 1))
-
-    del atoms[atoms.get_positions()[:, 2] < 2]
-
-    diagonal = np.hypot(box[0], box[1]) * 2
-    n = np.ceil(diagonal / atoms.get_cell()[0, 0]).astype(int)
-    m = np.ceil(diagonal / atoms.get_cell()[1, 1]).astype(int)
-
-    atoms *= (n, m, 1)
-
-    atoms.set_cell(box)
-    atoms.rotate(rotation, 'z')
-    atoms.center()
-
-    del atoms[atoms.get_positions()[:, 0] < edge_tol]
-    del atoms[atoms.get_positions()[:, 0] > box[0] - edge_tol]
-    del atoms[atoms.get_positions()[:, 1] < edge_tol]
-    del atoms[atoms.get_positions()[:, 1] > box[1] - edge_tol]
-
-    atoms = lloyds_relaxation(atoms, 1)
-    atoms.center()
-
-    return atoms
+        return combined_atoms

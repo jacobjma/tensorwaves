@@ -205,3 +205,6 @@ class PrismTemporalEnvelope(PrismCoefficients, TemporalEnvelopeBase):
     def copy(self):
         return self.__class__(focal_spread=self.focal_spread, kx=self.kx, ky=self.ky,
                               save_tensor=self.save_tensor, energy_wrapper=self.energy_wrapper.copy())
+
+
+#class SumEnvelopeBase(HasEnergy, FrequencyTransfer):

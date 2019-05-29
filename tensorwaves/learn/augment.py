@@ -6,9 +6,19 @@ from scipy.ndimage import gaussian_filter
 
 class Augmentation(object):
 
-    def __init__(self, p=1., image_only=False):
-        self._p = p
-        self._image_only = image_only
+    def __init__(self, p=1.):
+        self.p = p
+
+    def apply(self, *args):
+
+        if (self.p >= 1.) | (np.random.rand() < self.p):
+            return self.internal_apply(args)
+
+        else:
+            return args
+
+    def internal_apply(self, *args):
+        raise NotImplementedError()
 
     @property
     def image_only(self):
@@ -18,9 +28,9 @@ class Augmentation(object):
 class FlipAndRotate90(Augmentation):
 
     def __init__(self, p=1.):
-        Augmentation.__init__(self, p=p, image_only=False)
+        Augmentation.__init__(self, p=p)
 
-    def apply(self, image, atoms):
+    def internal_apply(self, image, atoms):
         if np.random.random() < .5:
             image = np.fliplr(image)
             positions = atoms.get_positions()
@@ -45,9 +55,9 @@ class FlipAndRotate90(Augmentation):
 class Roll(Augmentation):
 
     def __init__(self, p=1.):
-        Augmentation.__init__(self, p=p, image_only=False)
+        Augmentation.__init__(self, p=p)
 
-    def apply(self, image, atoms):
+    def internal_apply(self, image, atoms):
         roll = np.random.randint(0, image.shape[0])
         image = np.roll(image, roll, axis=0)
 
@@ -67,14 +77,14 @@ class Roll(Augmentation):
 class Crop(Augmentation):
 
     def __init__(self, size, p=1.):
-        Augmentation.__init__(self, p=p, image_only=False)
+        Augmentation.__init__(self, p=p)
 
         if isinstance(size, Number):
             size = (size, size)
 
         self.size = size
 
-    def apply(self, image, atoms):
+    def internal_apply(self, image, atoms):
         old_size = image.shape[:2]
 
         shift_x = np.random.randint(0, old_size[0] - self.size[0])
@@ -103,34 +113,34 @@ class Crop(Augmentation):
 class ScaleAndShift(Augmentation):
 
     def __init__(self, scale=1, shift=0., scale_jitter=0., shift_jitter=0., p=1):
-        Augmentation.__init__(self, p=p, image_only=True)
+        Augmentation.__init__(self, p=p)
         self.scale = scale
         self.shift = shift
         self.scale_jitter = scale_jitter
         self.shift_jitter = shift_jitter
 
-    def apply(self, image):
+    def internal_apply(self, image, atoms):
         scale = self.scale + self.scale_jitter * np.random.randn()
         shift = self.shift + self.shift_jitter * np.random.randn()
-        return scale * image + shift
+        return scale * image + shift, atoms
 
 
 class NormalizeRange(Augmentation):
 
     def __init__(self, p=1.):
-        Augmentation.__init__(self, p=p, image_only=True)
+        Augmentation.__init__(self, p=p)
 
-    def apply(self, image):
-        return (image - image.min()) / (image.max() - image.min())
+    def internal_apply(self, image, atoms):
+        return (image - image.min()) / (image.max() - image.min()), atoms
 
 
 class Normalize(Augmentation):
 
     def __init__(self, p=1.):
-        Augmentation.__init__(self, p=p, image_only=True)
+        Augmentation.__init__(self, p=p)
 
-    def apply(self, image):
-        return (image - np.mean(image)) / np.std(image)
+    def internal_apply(self, image):
+        return (image - np.mean(image)) / np.std(image), atoms
 
 
 def normalize_local(image, sigma):
@@ -143,24 +153,24 @@ def normalize_local(image, sigma):
 class NormalizeLocal(Augmentation):
 
     def __init__(self, sigma, p=1.):
-        Augmentation.__init__(self, p=p, image_only=True)
+        Augmentation.__init__(self, p=p)
         self.sigma = sigma
 
-    def apply_image(self, image):
+    def internal_apply(self, image, atoms):
         mean = gaussian_filter(image, self.sigma)
         image = image - mean
         image = image / np.sqrt(gaussian_filter(image ** 2, self.sigma))
-        return image
+        return image, atoms
 
 
 class GaussianBlur(Augmentation):
 
     def __init__(self, sigma, sigma_jitter, p=1.):
-        Augmentation.__init__(self, p=p, image_only=True)
+        Augmentation.__init__(self, p=p)
         self.sigma = sigma
         self.sigma_jitter = sigma_jitter
 
-    def apply(self, image):
+    def internal_apply(self, image):
         sigma = np.max((self.sigma + np.random.randn() * self.sigma_jitter, 0.))
         if sigma > 0.:
             return gaussian_filter(image, sigma)
@@ -171,24 +181,24 @@ class GaussianBlur(Augmentation):
 class Gamma(Augmentation):
 
     def __init__(self, gamma=1, gamma_jitter=0., p=1.):
-        Augmentation.__init__(self, p=p, image_only=True)
+        Augmentation.__init__(self, p=p)
         self.gamma = gamma
         self.gamma_jitter = gamma_jitter
 
-    def apply(self, image):
-        return image ** max(self.gamma + self.gamma_jitter * np.random.randn(), 0.)
+    def internal_apply(self, image, atoms):
+        return image ** max(self.gamma + self.gamma_jitter * np.random.randn(), 0.), atoms
 
 
 class PoissonNoise(Augmentation):
 
     def __init__(self, mean_min, mean_max=None, background_min=0., background_max=None, p=1.):
-        Augmentation.__init__(self, p=p, image_only=True)
+        Augmentation.__init__(self, p=p)
         self.mean_min = mean_min
         self.mean_max = mean_max
         self.background_min = background_min
         self.background_max = background_max
 
-    def apply(self, image):
+    def internal_apply(self, image, atoms):
         if self.background_max is None:
             background = self.background_min
         else:
@@ -204,18 +214,7 @@ class PoissonNoise(Augmentation):
 
         image = np.random.poisson(image * mean).astype(np.float32)
 
-        return image
-
-
-# if image.min() < 0:
-#    raise RuntimeError()
-# image[image < 0.] = 0.
-
-# scale = np.max(((self.mean + np.random.randn() * self.mean_jitter), .01))
-# mean = np.mean(image)
-# image = scale * image / mean
-# image = np.random.poisson(image).astype(np.float32)
-# return image / scale * mean
+        return image, atoms
 
 
 # class GaussianNoise(ImageAugmentation):
