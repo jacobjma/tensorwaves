@@ -1,5 +1,8 @@
-from ase import Atoms
+import itertools
+
 import numpy as np
+from ase import Atoms
+from scipy.spatial import Voronoi
 
 
 def wrap_positions(positions, cell, center=(0.5, 0.5), eps=1e-7):
@@ -8,8 +11,7 @@ def wrap_positions(positions, cell, center=(0.5, 0.5), eps=1e-7):
 
     shift = np.asarray(center) - 0.5 - eps
 
-    fractional = np.linalg.solve(cell.T,
-                                 np.asarray(positions).T).T - shift
+    fractional = np.linalg.solve(cell.T, np.asarray(positions).T).T - shift
 
     for i in range(2):
         fractional[:, i] %= 1.0
@@ -29,17 +31,77 @@ def fill_box(sites, box, rotation=0.):
     n = np.ceil(diagonal / sites.cell[0, 0]).astype(int)
     m = np.ceil(diagonal / sites.cell[1, 1]).astype(int)
 
-    sites *= (n, m, 1)
-
+    sites *= (n, m)
     sites.set_cell(box)
     sites.rotate(rotation)
     sites.center()
+    sites.crop()
 
-    del sites[sites.x < 0]
-    del sites[sites.x > box[0]]
-    del sites[sites.y < 0]
-    del sites[sites.y > box[1]]
     return sites
+
+
+def is_position_outside(positions, cell):
+    fractional = np.linalg.solve(cell.T, np.asarray(positions).T)
+    return (fractional[0] < 0) | (fractional[1] < 0) | (fractional[0] > 1) | (fractional[1] > 1)
+
+
+def repeat_positions(positions, cell, n, m, bothsided=False):
+    N = len(positions)
+
+    if bothsided:
+        n0, n1 = -n, n + 1
+        m0, m1 = -m, m + 1
+        new_positions = np.zeros(((2 * n + 1) * (2 * m + 1) * len(positions), 2), dtype=np.float)
+    else:
+        n0, n1 = 0, n
+        m0, m1 = 0, m
+        new_positions = np.zeros((n * m * len(positions), 2), dtype=np.float)
+
+    new_positions[:N] = positions.copy()
+
+    k = N
+    for i in range(n0, n1):
+        for j in range(m0, m1):
+            if i + j != 0:
+                l = k + N
+                new_positions[k:l] = positions + np.dot((i, j), cell)
+                k = l
+
+    return new_positions
+
+
+def voronoi_centroids(points):
+    def area_centroid(points):
+        points = np.vstack((points, points[0]))
+        A = 0
+        C = np.zeros(2)
+        for i in range(0, len(points) - 1):
+            s = points[i, 0] * points[i + 1, 1] - points[i + 1, 0] * points[i, 1]
+            A = A + s
+            C = C + (points[i, :] + points[i + 1, :]) * s
+        return (1 / (3. * A)) * C
+
+    vor = Voronoi(points)
+
+    centroids = np.zeros((len(points), 2))
+
+    j = 0
+    for i, point in enumerate(points):
+        if all(np.array(vor.regions[vor.point_region[i]]) > -1):
+            vertices = vor.vertices[vor.regions[vor.point_region[i]]]
+            centroids[j] = area_centroid(vertices)
+            j += 1
+
+    return centroids[:j]
+
+
+def lloyds_relaxation(positions):
+    n = len(positions)
+
+    centroids = voronoi_centroids(positions)
+    positions = centroids[:n]
+
+    return positions
 
 
 class SuperCell(object):
@@ -93,7 +155,7 @@ class SuperCell(object):
 
     def set_cell(self, cell):
 
-        cell = np.array(cell)
+        cell = np.array(cell, dtype=np.float)
 
         if cell.shape == (2,):
             cell = np.diag(cell)
@@ -141,19 +203,11 @@ class SuperCell(object):
         if isinstance(m, int):
             m = (m, m)
 
-        n = len(self)
-
         for name, a in self.arrays.items():
-            self._arrays[name] = np.tile(a, (np.product(m),) + (1,) * (len(a.shape) - 1))
+            if name != 'positions':
+                self._arrays[name] = np.tile(a, (np.product(m),) + (1,) * (len(a.shape) - 1))
 
-        positions = self.arrays['positions']
-
-        i0 = 0
-        for m0 in range(m[0]):
-            for m1 in range(m[1]):
-                i1 = i0 + n
-                positions[i0:i1] += np.dot((m0, m1), self.cell)
-                i0 = i1
+        self.arrays['positions'] = repeat_positions(self.positions, self.cell, m[0], m[1])
 
         self._cell = np.array([m[c] * self.cell[c] for c in range(2)])
 
@@ -169,10 +223,80 @@ class SuperCell(object):
     def wrap(self):
         self.arrays['positions'][:] = wrap_positions(self.positions, self.cell)
 
-    def center(self):
-        self.arrays['positions'][:] = (self.arrays['positions'][:] -
-                                       np.mean(self.arrays['positions'][:], axis=0) +
-                                       np.sum(self.cell, axis=1) / 2)
+    def center(self, axis=(0, 1), vacuum=None):
+        cell = self.cell.copy()
+        dirs = np.zeros_like(cell)
+
+        for i in range(2):
+            dirs[i] = np.array([-cell[i - 1][1], cell[i - 1][0]])
+            dirs[i] /= np.sqrt(np.dot(dirs[i], dirs[i]))
+
+            if np.dot(dirs[i], cell[i]) < 0.0:
+                dirs[i] *= -1
+
+        cell = self.cell.copy()
+
+        if isinstance(axis, int):
+            axes = (axis,)
+        else:
+            axes = axis
+
+        p = self.arrays['positions']
+
+        longer = np.zeros(2)
+        shift = np.zeros(2)
+        for i in axes:
+            p0 = np.dot(p, dirs[i]).min() if len(p) else 0
+            p1 = np.dot(p, dirs[i]).max() if len(p) else 0
+            height = np.dot(cell[i], dirs[i])
+
+            if vacuum is not None:
+                lng = (p1 - p0 + 2 * vacuum) - height
+            else:
+                lng = 0.0
+
+            top = lng + height - p1
+            shf = 0.5 * (top - p0)
+            cosphi = np.dot(cell[i], dirs[i]) / np.sqrt(np.dot(cell[i], cell[i]))
+
+            longer[i] = lng / cosphi
+            shift[i] = shf / cosphi
+
+        translation = np.zeros(2)
+        for i in axes:
+            nowlen = np.sqrt(np.dot(cell[i], cell[i]))
+            if vacuum is not None or self.cell[i].any():
+                self.cell[i] = cell[i] * (1 + longer[i] / nowlen)
+                translation += shift[i] * cell[i] / nowlen
+
+        self.arrays['positions'] += translation
+
+    def relax(self, n=1):
+
+        positions = self.positions
+
+        N = len(positions)
+        for i in range(n):
+            positions = repeat_positions(positions, self.cell, 1, 1, True)
+
+            # import matplotlib.pyplot as plt
+            # print(positions)
+
+            centroids = voronoi_centroids(positions)
+            positions = centroids[:N]
+
+            positions = wrap_positions(positions, self.cell)
+
+            # print(centroids)
+
+            # plt.plot(*centroids.T)
+            # plt.show()
+            # sss
+
+        self.arrays['positions'][:] = positions
+
+    def crop(self):
+        del self[is_position_outside(self.positions, self.cell)]
 
     def rotate(self, angle, center=None):
 
@@ -241,7 +365,7 @@ class Site(object):
         if self._flip:
             if np.random.rand() < .5:
                 positions = structure.positions
-                positions[:,2] = -positions[:,2]
+                positions[:, 2] = -positions[:, 2]
                 structure.positions = positions
 
         return structure

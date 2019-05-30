@@ -23,3 +23,15 @@ def nms(positions, probabilities, radius=2):
                 accepted[i] = True
 
     return positions[accepted], probabilities[accepted]
+
+
+def generate_indices(labels):
+    labels = labels.flatten()
+    labels_order = labels.argsort()
+    sorted_labels = labels[labels_order]
+    indices = np.arange(0, len(labels) + 1)[labels_order]
+    index = np.arange(1, np.max(labels) + 1)
+    lo = np.searchsorted(sorted_labels, index, side='left')
+    hi = np.searchsorted(sorted_labels, index, side='right')
+    for i, (l, h) in enumerate(zip(lo, hi)):
+        yield np.sort(indices[l:h])

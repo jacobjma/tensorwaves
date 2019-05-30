@@ -2,15 +2,13 @@ import numpy as np
 
 from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.spatial.distance import cdist
+from tensorwaves.learn.utils import generate_indices
 
 
-def cluster_and_classify(atoms=None, atomic_positions=None, atomic_numbers=None, distance=1., fingerprints=None,
-                         return_clusters=False, assign_unidentified=-1):
-    if atoms is not None:
-        atomic_positions = atoms.get_positions()[:, :2]
-        atomic_numbers = atoms.get_atomic_numbers()
-    elif (atomic_positions is None) | (atomic_numbers is None):
-        raise RuntimeError()
+def cluster_and_classify(atoms=None, distance=1., clusters=None, return_clusters=False, assign_unidentified=-1):
+
+    atomic_positions = atoms.get_positions()[:, :2]
+    atomic_numbers = atoms.get_atomic_numbers()
 
     if fingerprints is None:
         fingerprints = ()
@@ -85,18 +83,6 @@ def gaussian_marker_label(atoms, shape, width, periodic=False):
     return markers
 
 
-def generate_indices(labels):
-    labels = labels.flatten()
-    labels_order = labels.argsort()
-    sorted_labels = labels[labels_order]
-    indices = np.arange(0, len(labels) + 1)[labels_order]
-    index = np.arange(1, np.max(labels) + 1)
-    lo = np.searchsorted(sorted_labels, index, side='left')
-    hi = np.searchsorted(sorted_labels, index, side='right')
-    for i, (l, h) in enumerate(zip(lo, hi)):
-        yield np.sort(indices[l:h])
-
-
 def voronoi_label(atoms, shape):
     from skimage.morphology import watershed
 
@@ -145,18 +131,7 @@ def closest_position_label(atoms, shape):
     return np.stack([x.reshape(labels.shape), y.reshape(labels.shape)], -1).reshape(shape + (2,))
 
 
-def apply_augmentations(images, atoms, augmentations):
-    for i in range(len(images)):
-        for augmentation in augmentations:
-            if augmentation.image_only:
-                images[i] = augmentation.apply(images[i])
-            else:
-                images[i], atoms[i] = augmentation.apply(images[i], atoms[i])
-
-    return images, atoms
-
-
-def data_generator(images, atoms, label_func, batch_size=32, shuffle=True, augmentations=None):
+def data_generator(images, atoms, label_func, batch_size=32, augmentations=None):
     if augmentations is None:
         augmentations = []
 
@@ -183,13 +158,6 @@ def data_generator(images, atoms, label_func, batch_size=32, shuffle=True, augme
             batch_images = np.stack(batch_images)
 
             size = batch_images.shape[1:-1]
-            #displacements = np.zeros((batch_size, size // 4, size // 4, 2), dtype=np.float32)
-            #markers = np.zeros((batch_size, size // 4, size // 4, 1), dtype=np.float32)
-            #instances = np.zeros((batch_size, size // 4, size // 4, 1), dtype=np.int)
-
-            #neighbors = []
-            #neighbor_weights = []
-            # weights = np.zeros((batch_size, size // 4, size // 4, 1), dtype=np.float32)
 
             batch_labels = label_func(batch_atoms, size)
 
