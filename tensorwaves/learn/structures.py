@@ -26,16 +26,18 @@ def hexagonal_to_rectangular(sites):
     return sites
 
 
-def fill_box(sites, box, rotation=0.):
+def fill_box(sites, box, rotation=0., border=0.):
     diagonal = np.hypot(box[0], box[1]) * 2
     n = np.ceil(diagonal / sites.cell[0, 0]).astype(int)
     m = np.ceil(diagonal / sites.cell[1, 1]).astype(int)
 
     sites *= (n, m)
-    sites.set_cell(box)
+    sites.set_cell(np.array(box) - border)
     sites.rotate(rotation)
     sites.center()
     sites.crop()
+    sites.set_cell(box)
+    sites.positions += border / 2
 
     return sites
 
@@ -307,36 +309,13 @@ class SuperCell(object):
 
         R = np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
 
-        self.arrays['positions'][:] = np.dot(R, self.positions.T - np.array(center)[:, None]).T
+        self.arrays['positions'][:] = np.dot(R, self.positions.T - np.array(center)[:, None]).T + center
 
     def copy(self):
         arrays = {key: value.copy() for key, value in self.arrays.items()}
         positions = arrays['positions']
         del arrays['positions']
         return self.__class__(positions=positions, cell=self._cell.copy(), arrays=arrays)
-
-
-class Label(object):
-
-    def __init__(self, positions=None, structure_classes=None, cell=None):
-        if structure_classes is None:
-            structure_classes = np.zeros(len(positions), dtype=np.int)
-
-        assert len(positions) == len(structure_classes)
-
-        self._positions = np.array(positions)
-        arrays = {'structure_classes': np.array(structure_classes)}
-
-        super().__init__(positions=positions, arrays=arrays, cell=cell)
-
-    @property
-    def structure_classes(self):
-        return self._arrays['structure_classes']
-
-    def copy(self):
-        positions = self.arrays['positions'].copy()
-        structure_classes = self.arrays['structure_classes'].copy()
-        return self.__class__(positions=positions, structure_classes=structure_classes, cell=self.cell.copy())
 
 
 class Site(object):
@@ -355,20 +334,32 @@ class Site(object):
 
         self._structures = structures
 
-        self._flip = flip
+        self.flip = flip
+
+    @property
+    def structures(self):
+        return self._structures
+
+    @property
+    def probabilities(self):
+        return self._probabilities
 
     def choose(self):
         i = np.random.choice(np.arange(len(self._structures)), 1, p=self._probabilities)[0]
 
         structure = self._structures[i]
 
-        if self._flip:
+        if self.flip:
             if np.random.rand() < .5:
                 positions = structure.positions
                 positions[:, 2] = -positions[:, 2]
                 structure.positions = positions
 
         return structure
+
+    def copy(self):
+        structures = [structure.copy() for structure in self.structures]
+        return self.__class__(structures, self.probabilities.copy(), self.flip)
 
 
 class Sites(SuperCell):
@@ -400,3 +391,7 @@ class Sites(SuperCell):
         combined_atoms.center(axis=2, vacuum=2)
 
         return combined_atoms
+
+    def copy(self):
+        sites = [site.copy() for site in self.sites]
+        return self.__class__(sites=sites, positions=self.positions.copy(), cell=self.cell.copy())

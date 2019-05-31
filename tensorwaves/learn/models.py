@@ -1,100 +1,66 @@
-import numpy as np
 import tensorflow as tf
-from tensorflow import keras
 
 
 def conv2d_block(input_tensor, n_filters, kernel_size=3, batchnorm=True):
-    x = keras.layers.Conv2D(filters=n_filters, kernel_size=(kernel_size, kernel_size), kernel_initializer="he_normal",
-                            padding="same")(input_tensor)
+    # first layer
+    x = tf.keras.layers.Conv2D(filters=n_filters, kernel_size=(kernel_size, kernel_size),
+                               kernel_initializer="he_normal",
+                               padding="same")(input_tensor)
     if batchnorm:
-        x = keras.layers.BatchNormalization()(x)
-
-    x = keras.layers.Activation("relu")(x)
-
-    x = keras.layers.Conv2D(filters=n_filters, kernel_size=(kernel_size, kernel_size), kernel_initializer="he_normal",
-                            padding="same")(x)
+        x = tf.keras.layers.BatchNormalization()(x)
+    x = tf.keras.layers.Activation("relu")(x)
+    # second layer
+    x = tf.keras.layers.Conv2D(filters=n_filters, kernel_size=(kernel_size, kernel_size),
+                               kernel_initializer="he_normal",
+                               padding="same")(x)
     if batchnorm:
-        x = keras.layers.BatchNormalization()(x)
-
-    x = keras.layers.Activation("relu")(x)
+        x = tf.keras.layers.BatchNormalization()(x)
+    x = tf.keras.layers.Activation("relu")(x)
     return x
 
 
-def get_neural_net(n_filters=16, dropout=0.1, batchnorm=True):
-    input = keras.Input((None, None, 1))
+def get_unet(input, n_filters=16, dropout=0.5, batchnorm=True):
+    # contracting path
+    c1 = conv2d_block(input, n_filters=n_filters * 1, kernel_size=3, batchnorm=batchnorm)
+    p1 = tf.keras.layers.MaxPooling2D((2, 2))(c1)
+    p1 = tf.keras.layers.Dropout(dropout * 0.5)(p1)
 
-    x = conv2d_block(input, n_filters=n_filters * 1, kernel_size=3, batchnorm=batchnorm)
-    x = keras.layers.MaxPooling2D((2, 2))(x)
-    x = keras.layers.Dropout(dropout)(x)
+    c2 = conv2d_block(p1, n_filters=n_filters * 2, kernel_size=3, batchnorm=batchnorm)
+    p2 = tf.keras.layers.MaxPooling2D((2, 2))(c2)
+    p2 = tf.keras.layers.Dropout(dropout)(p2)
 
-    x = conv2d_block(x, n_filters=n_filters * 2, kernel_size=3, batchnorm=batchnorm)
-    x = keras.layers.MaxPooling2D((2, 2))(x)
-    x = keras.layers.Dropout(dropout)(x)
+    c3 = conv2d_block(p2, n_filters=n_filters * 4, kernel_size=3, batchnorm=batchnorm)
+    p3 = tf.keras.layers.MaxPooling2D((2, 2))(c3)
+    p3 = tf.keras.layers.Dropout(dropout)(p3)
 
-    x = conv2d_block(x, n_filters=n_filters * 4, kernel_size=3, batchnorm=batchnorm)
-    # x = keras.layers.MaxPooling2D((2, 2))(x)
-    x = keras.layers.Dropout(dropout)(x)
+    c4 = conv2d_block(p3, n_filters=n_filters * 8, kernel_size=3, batchnorm=batchnorm)
+    p4 = tf.keras.layers.MaxPooling2D(pool_size=(2, 2))(c4)
+    p4 = tf.keras.layers.Dropout(dropout)(p4)
 
-    # x = conv2d_block(x, n_filters=n_filters * 8, kernel_size=3, batchnorm=batchnorm)
+    c5 = conv2d_block(p4, n_filters=n_filters * 16, kernel_size=3, batchnorm=batchnorm)
 
-    # x = keras.layers.Dropout(dropout)(x)
+    # expansive path
+    u6 = tf.keras.layers.UpSampling2D((2, 2))(c5)
+    u6 = tf.keras.layers.concatenate([u6, c4])
+    u6 = tf.keras.layers.Dropout(dropout)(u6)
+    c6 = conv2d_block(u6, n_filters=n_filters * 8, kernel_size=3, batchnorm=batchnorm)
 
-    x = conv2d_block(x, n_filters=n_filters * 8, kernel_size=3, batchnorm=batchnorm)
+    u7 = tf.keras.layers.UpSampling2D((2, 2))(c6)
+    u7 = tf.keras.layers.concatenate([u7, c3])
+    u7 = tf.keras.layers.Dropout(dropout)(u7)
+    c7 = conv2d_block(u7, n_filters=n_filters * 4, kernel_size=3, batchnorm=batchnorm)
 
-    # x = keras.layers.Dropout(dropout)(x)
-    # x = conv2d_block(x, n_filters=n_filters * 8, kernel_size=3, batchnorm=batchnorm)
+    u8 = tf.keras.layers.UpSampling2D((2, 2))(c7)
+    u8 = tf.keras.layers.concatenate([u8, c2])
+    u8 = tf.keras.layers.Dropout(dropout)(u8)
+    c8 = conv2d_block(u8, n_filters=n_filters * 2, kernel_size=3, batchnorm=batchnorm)
 
-    # x = keras.layers.Conv2D(filters=n_filters * 16, kernel_size=(1, 1))(x)
-    # x = keras.layers.Dropout(dropout)(x)
+    u9 = tf.keras.layers.UpSampling2D((2, 2))(c8)
+    u9 = tf.keras.layers.concatenate([u9, c1], axis=3)
+    u9 = tf.keras.layers.Dropout(dropout)(u9 * 0.5)
+    c9 = conv2d_block(u9, n_filters=n_filters * 1, kernel_size=3, batchnorm=batchnorm)
 
-    x = keras.layers.Conv2D(filters=n_filters * 8, kernel_size=(1, 1))(x)
-
-    # predictors = keras.layers.Conv2D(filters=1, kernel_size=(1, 1), name='markers')(x)
-
-    displacements = keras.layers.Conv2D(filters=2, kernel_size=(1, 1), name='displacements')(x)
-    markers = keras.layers.Conv2D(filters=1, kernel_size=(1, 1), name='markers')(x)
-    embedding = keras.layers.Conv2D(filters=3, kernel_size=(1, 1), name='embedding')(x)
-
-    # confidence = keras.layers.Conv2D(filters=1, kernel_size=(1, 1), name='confidence')(x)
-
-    return keras.Model(inputs=[input], outputs=[displacements, embedding, markers])
+    return c9
 
 
-def get_unet(n_filters=16, dropout=0.1, batchnorm=True):
-    input = keras.Input((None, None, 1))
 
-    x = conv2d_block(input, n_filters=n_filters * 1, kernel_size=3, batchnorm=batchnorm)
-    x = keras.layers.MaxPooling2D((2, 2))(x)
-    x = keras.layers.Dropout(dropout)(x)
-
-    x = conv2d_block(x, n_filters=n_filters * 2, kernel_size=3, batchnorm=batchnorm)
-    x = keras.layers.MaxPooling2D((2, 2))(x)
-    x = keras.layers.Dropout(dropout)(x)
-
-    x = conv2d_block(x, n_filters=n_filters * 4, kernel_size=3, batchnorm=batchnorm)
-    # x = keras.layers.MaxPooling2D((2, 2))(x)
-    x = keras.layers.Dropout(dropout)(x)
-
-    # x = conv2d_block(x, n_filters=n_filters * 8, kernel_size=3, batchnorm=batchnorm)
-
-    # x = keras.layers.Dropout(dropout)(x)
-
-    x = conv2d_block(x, n_filters=n_filters * 8, kernel_size=3, batchnorm=batchnorm)
-
-    # x = keras.layers.Dropout(dropout)(x)
-    # x = conv2d_block(x, n_filters=n_filters * 8, kernel_size=3, batchnorm=batchnorm)
-
-    # x = keras.layers.Conv2D(filters=n_filters * 16, kernel_size=(1, 1))(x)
-    # x = keras.layers.Dropout(dropout)(x)
-
-    x = keras.layers.Conv2D(filters=n_filters * 8, kernel_size=(1, 1))(x)
-
-    # predictors = keras.layers.Conv2D(filters=1, kernel_size=(1, 1), name='markers')(x)
-
-    displacements = keras.layers.Conv2D(filters=2, kernel_size=(1, 1), name='displacements')(x)
-    markers = keras.layers.Conv2D(filters=1, kernel_size=(1, 1), name='markers')(x)
-    embedding = keras.layers.Conv2D(filters=3, kernel_size=(1, 1), name='embedding')(x)
-
-    # confidence = keras.layers.Conv2D(filters=1, kernel_size=(1, 1), name='confidence')(x)
-
-    return keras.Model(inputs=[input], outputs=[displacements, embedding, markers])

@@ -12,7 +12,7 @@ class Augmentation(object):
     def apply(self, *args):
 
         if (self.p >= 1.) | (np.random.rand() < self.p):
-            return self.internal_apply(args)
+            return self.internal_apply(*args)
 
         else:
             return args
@@ -20,36 +20,27 @@ class Augmentation(object):
     def internal_apply(self, *args):
         raise NotImplementedError()
 
-    @property
-    def image_only(self):
-        return self._image_only
-
 
 class FlipAndRotate90(Augmentation):
 
     def __init__(self, p=1.):
         Augmentation.__init__(self, p=p)
 
-    def internal_apply(self, image, atoms):
+    def internal_apply(self, image, label):
         if np.random.random() < .5:
             image = np.fliplr(image)
-            positions = atoms.get_positions()
-            positions[:, 1] = atoms.get_cell()[1, 1] - positions[:, 1]
-            atoms.set_positions(positions)
+            label.positions[:, 1] = label.cell[1, 1] - label.positions[:, 1]
 
         if np.random.random() < .5:
             image = np.flipud(image)
-            positions = atoms.get_positions()
-            positions[:, 0] = atoms.get_cell()[0, 0] - positions[:, 0]
-            atoms.set_positions(positions)
+            label.positions[:, 0] = label.cell[0, 0] - label.positions[:, 0]
 
         if np.random.random() < .5:
             image = np.rot90(image)
-            center = np.diag(atoms.get_cell()) / 2
-            atoms.rotate(90, 'z', center=center)
+            center = np.diag(label.cell) / 2
+            label.rotate(90, center=center)
 
-        atoms.wrap(pbc=True)
-        return image, atoms
+        return image, label
 
 
 class Roll(Augmentation):
@@ -57,21 +48,18 @@ class Roll(Augmentation):
     def __init__(self, p=1.):
         Augmentation.__init__(self, p=p)
 
-    def internal_apply(self, image, atoms):
+    def internal_apply(self, image, label):
         roll = np.random.randint(0, image.shape[0])
         image = np.roll(image, roll, axis=0)
 
-        positions = atoms.get_positions()
-        positions[:, 0] = positions[:, 0] + roll * atoms.get_cell()[0, 0] / image.shape[0]
-        atoms.set_positions(positions)
+        label.positions[:, 0] = label.positions[:, 0] + roll * label.cell[0, 0] / image.shape[0]
 
         roll = np.random.randint(0, image.shape[1])
         image = np.roll(image, roll, axis=1)
-        positions[:, 1] = positions[:, 1] + roll * atoms.get_cell()[1, 1] / image.shape[1]
-        atoms.set_positions(positions)
+        label.positions[:, 1] = label.positions[:, 1] + roll * label.cell[1, 1] / image.shape[1]
 
-        atoms.wrap(pbc=True)
-        return image, atoms
+        label.wrap()
+        return image, label
 
 
 class Crop(Augmentation):
@@ -84,7 +72,7 @@ class Crop(Augmentation):
 
         self.size = size
 
-    def internal_apply(self, image, atoms):
+    def internal_apply(self, image, label):
         old_size = image.shape[:2]
 
         shift_x = np.random.randint(0, old_size[0] - self.size[0])
@@ -92,22 +80,16 @@ class Crop(Augmentation):
 
         image = image[shift_x:shift_x + self.size[0], shift_y:shift_y + self.size[1]]
 
-        sampling = np.diag(atoms.get_cell())[:2] / old_size
-        positions = atoms.get_positions()
-        positions[:, :2] = positions[:, :2] - np.array((shift_x, shift_y)) * sampling
-        atoms.set_positions(positions)
+        sampling = np.diag(label.cell)[:2] / old_size
 
-        del atoms[atoms.get_positions()[:, 0] < 0]
-        del atoms[atoms.get_positions()[:, 1] < 0]
-        del atoms[atoms.get_positions()[:, 0] > self.size[0] * sampling[0]]
-        del atoms[atoms.get_positions()[:, 1] > self.size[1] * sampling[1]]
+        label.positions = label.positions - np.array((shift_x, shift_y)) * sampling
 
-        cell = atoms.get_cell()
-        cell[0, 0] = self.size[0] * sampling[0]
-        cell[1, 1] = self.size[1] * sampling[1]
-        atoms.set_cell(cell)
+        label.cell[0, 0] = self.size[0] * sampling[0]
+        label.cell[1, 1] = self.size[1] * sampling[1]
 
-        return image, atoms
+        label.crop()
+
+        return image, label
 
 
 class ScaleAndShift(Augmentation):
@@ -119,10 +101,10 @@ class ScaleAndShift(Augmentation):
         self.scale_jitter = scale_jitter
         self.shift_jitter = shift_jitter
 
-    def internal_apply(self, image, atoms):
+    def internal_apply(self, image, label):
         scale = self.scale + self.scale_jitter * np.random.randn()
         shift = self.shift + self.shift_jitter * np.random.randn()
-        return scale * image + shift, atoms
+        return scale * image + shift, label
 
 
 class NormalizeRange(Augmentation):
@@ -130,8 +112,8 @@ class NormalizeRange(Augmentation):
     def __init__(self, p=1.):
         Augmentation.__init__(self, p=p)
 
-    def internal_apply(self, image, atoms):
-        return (image - image.min()) / (image.max() - image.min()), atoms
+    def internal_apply(self, image, label):
+        return (image - image.min()) / (image.max() - image.min()), label
 
 
 class Normalize(Augmentation):
@@ -139,8 +121,8 @@ class Normalize(Augmentation):
     def __init__(self, p=1.):
         Augmentation.__init__(self, p=p)
 
-    def internal_apply(self, image):
-        return (image - np.mean(image)) / np.std(image), atoms
+    def internal_apply(self, image, label):
+        return (image - np.mean(image)) / np.std(image), label
 
 
 def normalize_local(image, sigma):
@@ -156,11 +138,11 @@ class NormalizeLocal(Augmentation):
         Augmentation.__init__(self, p=p)
         self.sigma = sigma
 
-    def internal_apply(self, image, atoms):
+    def internal_apply(self, image, label):
         mean = gaussian_filter(image, self.sigma)
         image = image - mean
         image = image / np.sqrt(gaussian_filter(image ** 2, self.sigma))
-        return image, atoms
+        return image, label
 
 
 class GaussianBlur(Augmentation):
@@ -170,12 +152,9 @@ class GaussianBlur(Augmentation):
         self.sigma = sigma
         self.sigma_jitter = sigma_jitter
 
-    def internal_apply(self, image):
+    def internal_apply(self, image, label):
         sigma = np.max((self.sigma + np.random.randn() * self.sigma_jitter, 0.))
-        if sigma > 0.:
-            return gaussian_filter(image, sigma)
-        else:
-            return image
+        return gaussian_filter(image, sigma), label
 
 
 class Gamma(Augmentation):
@@ -185,51 +164,51 @@ class Gamma(Augmentation):
         self.gamma = gamma
         self.gamma_jitter = gamma_jitter
 
-    def internal_apply(self, image, atoms):
-        return image ** max(self.gamma + self.gamma_jitter * np.random.randn(), 0.), atoms
+    def internal_apply(self, image, label):
+        return image ** max(self.gamma + self.gamma_jitter * np.random.randn(), 0.), label
 
 
 class PoissonNoise(Augmentation):
 
-    def __init__(self, mean_min, mean_max=None, background_min=0., background_max=None, p=1.):
+    def __init__(self, mean, background=0., p=1.):
         Augmentation.__init__(self, p=p)
-        self.mean_min = mean_min
-        self.mean_max = mean_max
-        self.background_min = background_min
-        self.background_max = background_max
+        self.mean = mean
+        self.background = background
 
-    def internal_apply(self, image, atoms):
-        if self.background_max is None:
-            background = self.background_min
-        else:
-            background = np.random.uniform(self.background_min, self.background_max)
+    def internal_apply(self, image, label):
+        try:
+            background = np.random.uniform(self.background[0], self.background[1])
+
+        except:
+            background = self.background
+
+        try:
+            mean = np.random.uniform(self.mean[0], self.mean[1])
+
+        except:
+            mean = self.mean
 
         image = image - image.min() + background
         image = image / image.sum() * np.prod(image.shape[:2])
 
-        if self.mean_max is None:
-            mean = self.mean_min
-        else:
-            mean = np.random.uniform(self.mean_min, self.mean_max)
-
         image = np.random.poisson(image * mean).astype(np.float32)
 
-        return image, atoms
+        return image, label
 
 
-# class GaussianNoise(ImageAugmentation):
-#
-#     def __init__(self, amount, amount_jitter=0.):
-#         ImageAugmentation.__init__(self)
-#         self.amount = amount
-#         self.amount_jitter = amount_jitter
-#
-#     def apply_image(self, image):
-#         amount = self.amount + np.random.randn() * self.amount_jitter
-#         image = image + np.random.randn(*image.shape) * amount
-#         return image
-#
-#
+class GaussianNoise(Augmentation):
+
+    def __init__(self, amount, amount_jitter=0., p=1.):
+        Augmentation.__init__(self, p=p)
+        self.amount = amount
+        self.amount_jitter = amount_jitter
+
+    def apply_image(self, image):
+        amount = self.amount + np.random.randn() * self.amount_jitter
+        image = image + np.random.randn(*image.shape) * amount
+        return image
+
+
 def bandpass_noise(inner, outer, n):
     k = np.fft.fftfreq(n)
     inner = inner / n
@@ -255,32 +234,29 @@ class ScanNoise(Augmentation):
 
     def __init__(self, scale, amount, fine_amount=None, p=1.):
 
-        Augmentation.__init__(self, p=p, image_only=True)
+        Augmentation.__init__(self, p=p)
         self.scale = scale
         self.amount = amount
         if fine_amount is None:
             self.fine_amount = self.amount / 2
 
-    def apply(self, image):
-        if self._p > np.random.rand():
-            fine_scale = np.max(image.shape[:-1])
+    def internal_apply(self, image, label):
+        fine_scale = np.max(image.shape[:-1])
 
-            n = ((self.amount * bandpass_noise(0, self.scale, image.shape[1]) +
-                  self.amount / 2 * bandpass_noise(0, fine_scale, image.shape[1]))).astype(int)
+        n = ((self.amount * bandpass_noise(0, self.scale, image.shape[1]) +
+              self.amount / 2 * bandpass_noise(0, fine_scale, image.shape[1]))).astype(int)
 
-            def strided_indexing_roll(a, r):
-                from skimage.util.shape import view_as_windows
-                a_ext = np.concatenate((a, a[:, :-1]), axis=1)
-                n = a.shape[1]
-                return view_as_windows(a_ext, (1, n))[np.arange(len(r)), (n - r) % n, 0]
+        def strided_indexing_roll(a, r):
+            from skimage.util.shape import view_as_windows
+            a_ext = np.concatenate((a, a[:, :-1]), axis=1)
+            n = a.shape[1]
+            return view_as_windows(a_ext, (1, n))[np.arange(len(r)), (n - r) % n, 0]
 
-            for i in range(image.shape[-1]):
-                image[..., i] = strided_indexing_roll(image[..., i], n)
+        for i in range(image.shape[-1]):
+            image[..., i] = strided_indexing_roll(image[..., i], n)
 
-            return image
-        else:
-            return image
-#
+        return image, label
+
 # class Dirt(ImageAugmentation):
 #
 #     def __init__(self, scale, fraction, noise_scale=None, amount=1, amount_jitter=0):
