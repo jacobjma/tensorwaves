@@ -5,20 +5,36 @@ import tensorflow as tf
 from IPython.display import clear_output
 
 
-def batch_generator(n_items, max_batch_size):
-    n_batches = (n_items + (-n_items % max_batch_size)) // max_batch_size
-    batch_size = (n_items + (-n_items % n_batches)) // n_batches
+class BatchGenerator(object):
 
-    batch_start = 0
-    while 1:
-        batch_end = batch_start + batch_size
-        if batch_end >= n_items:
-            yield batch_start, n_items - batch_end + batch_size
-            break
-        else:
-            yield batch_start, batch_size
+    def __init__(self, n_items, max_batch_size):
+        self._n_items = n_items
+        self._n_batches = (n_items + (-n_items % max_batch_size)) // max_batch_size
+        self._batch_size = (n_items + (-n_items % self.n_batches)) // self.n_batches
 
-        batch_start = batch_end
+    @property
+    def n_batches(self):
+        return self._n_batches
+
+    @property
+    def batch_size(self):
+        return self._batch_size
+
+    @property
+    def n_items(self):
+        return self._n_items
+
+    def generate(self):
+        batch_start = 0
+        while 1:
+            batch_end = batch_start + self.batch_size
+            if batch_end >= self.n_items:
+                yield batch_start, self.n_items - batch_end + self.batch_size
+                break
+            else:
+                yield batch_start, self.batch_size
+
+            batch_start = batch_end
 
 
 def log_grid(start, stop, n):

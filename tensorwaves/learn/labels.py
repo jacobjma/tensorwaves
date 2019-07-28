@@ -1,36 +1,58 @@
 import numpy as np
-
 from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.spatial.distance import cdist
-from tensorwaves.learn.utils import generate_indices
+
 from tensorwaves.learn.structures import SuperCell
+from tensorwaves.learn.utils import generate_indices
 
 
-def cluster_and_classify(positions, atomic_numbers, fingerprints, distance=.1):
-    for i, fingerprint in enumerate(fingerprints):
-        fingerprints[i] = sorted(fingerprint)
+def cluster_and_classify(positions, atomic_numbers, fingerprints=None, distance=1., return_clusters=False,
+                         assign_unidentified=True):
+    assert positions.shape[1] == 2
+    assert len(positions) == len(atomic_numbers)
+
+    if fingerprints is None:
+        fingerprints = []
 
     cluster_ids = fcluster(linkage(positions), distance, criterion='distance')
 
-    class_ids = np.zeros(cluster_ids.max(), dtype=np.int32)
+    class_ids = np.zeros(len(positions), dtype=np.int32)
     class_ids[:] = -1
-
-    cluster_positions = np.zeros((cluster_ids.max(), 2), dtype=np.float)
 
     for i, cluster in enumerate(np.unique(cluster_ids)):
         cluster = np.where(cluster_ids == cluster)[0]
+        assignment = -1
 
-        cluster_positions[i] = np.mean(positions[cluster], axis=0)
+        for j, fingerprint in enumerate(fingerprints):
 
-        try:
-            n = sorted(tuple(atomic_numbers[cluster]))
-            class_id = fingerprints.index(n)
-            class_ids[i] = class_id
+            if len(cluster) == len(fingerprint):
 
-        except:
-            class_ids[i] = -1
+                if np.all(fingerprint == atomic_numbers[cluster]):
+                    assignment = j
+                    break
 
-    return cluster_positions, class_ids
+        if assignment > -1:
+            class_ids[cluster] = assignment
+
+        if assign_unidentified & (assignment == -1):
+            fingerprints += [atomic_numbers[cluster]]
+            class_ids[cluster] = len(fingerprints) - 1
+
+    if return_clusters:
+        cluster_positions, cluster_class_ids = get_cluster_positions(positions, cluster_ids, class_ids)
+        return cluster_positions, cluster_class_ids, cluster_ids, class_ids, fingerprints
+    else:
+        return cluster_ids, class_ids, fingerprints
+
+
+def get_cluster_positions(atomic_positions, cluster_ids, class_ids):
+    positions = []
+    cluster_class_ids = []
+    for label in range(1, cluster_ids.max() + 1):
+        positions.append(np.mean(atomic_positions[cluster_ids == label], axis=0))
+        cluster_class_ids.append(class_ids[cluster_ids == label][0])
+
+    return np.array(positions)[:, :2], cluster_class_ids
 
 
 def gaussian_marker_label(positions, shape, width, periodic=False):
@@ -43,9 +65,9 @@ def gaussian_marker_label(positions, shape, width, periodic=False):
 
     for position in positions:
         x_lim_min = np.round(position[0]).astype(int)
-        x_lim_max = np.round(position[0] + 2 * margin + 1).astype(int)
+        x_lim_max = np.round(position[0] + 3 * margin + 1).astype(int)
         y_lim_min = np.round(position[1]).astype(int)
-        y_lim_max = np.round(position[1] + 2 * margin + 1).astype(int)
+        y_lim_max = np.round(position[1] + 3 * margin + 1).astype(int)
 
         x_window = x[x_lim_min: x_lim_max, y_lim_min: y_lim_max]
         y_window = y[x_lim_min: x_lim_max, y_lim_min: y_lim_max]
@@ -96,8 +118,8 @@ def voronoi_label(positions, class_ids, shape):
     return labels
 
 
-def labels_to_masks(labels):
-    masks = np.zeros((np.prod(labels.shape),) + (labels.max(),), dtype=bool)
+def labels_to_masks(labels, n_classes):
+    masks = np.zeros((np.prod(labels.shape),) + (n_classes,), dtype=bool)
 
     for i, indices in enumerate(generate_indices(labels)):
         masks[indices, i] = True
@@ -107,9 +129,11 @@ def labels_to_masks(labels):
 
 class Label(SuperCell):
 
-    def __init__(self, positions, class_ids, cell=None):
+    def __init__(self, positions, class_ids, cell=None, n_classes=None, marker_width=.5):
         self._positions = np.array(positions, np.float)
 
+        self._n_classes = n_classes
+        self._marker_width = marker_width
         arrays = {'class_ids': np.array(class_ids)}
 
         super().__init__(positions=positions, cell=cell, arrays=arrays)
@@ -118,32 +142,44 @@ class Label(SuperCell):
     def class_ids(self):
         return self._arrays['class_ids']
 
+    def scale(self, scale):
+
+        self.positions[:] = self.positions * scale
+        self.cell[:] = self.cell * scale
+        self._marker_width = self._marker_width * scale
+
     def voronoi_masks(self, shape):
         if isinstance(shape, int):
             shape = (shape, shape)
 
         positions = self.positions / np.diag(self.cell) * np.array(shape)
         labels = voronoi_label(positions, self.class_ids, shape)
-        masks = labels_to_masks(labels)
+        masks = labels_to_masks(labels, self._n_classes)
         return masks
 
-    def gaussian_markers(self, shape, width):
+    def gaussian_markers(self, shape):
         if isinstance(shape, int):
             shape = (shape, shape)
         positions = self.positions / np.diag(self.cell) * np.array(shape)
-        width = width / self.cell[0, 0] * shape[0]
+        width = self._marker_width / self.cell[0, 0] * shape[0]
         return gaussian_marker_label(positions, shape, width)
 
+    def as_images(self, shape):
+        return self.gaussian_markers(shape), self.voronoi_masks(shape)
+
     def copy(self):
-        return self.__class__(positions=self.positions.copy(), class_ids=self.class_ids.copy(), cell=self.cell.copy())
+        return self.__class__(positions=self.positions.copy(), class_ids=self.class_ids.copy(), cell=self.cell.copy(),
+                              n_classes=self._n_classes, marker_width=self._marker_width)
 
 
-def create_label(atoms, fingerprints, distance=.1):
+def create_label(atoms, fingerprints, n_classes, distance=.1, marker_width=.5):
     positions = atoms.get_positions()[:, :2]
     atomic_numbers = atoms.get_atomic_numbers()
 
-    cluster_positions, class_ids = cluster_and_classify(positions, atomic_numbers, fingerprints, distance=distance)
+    cluster_positions, class_ids, _, _, fingerprints = cluster_and_classify(positions, atomic_numbers, fingerprints,
+                                                                            distance=distance, return_clusters=True,
+                                                                            assign_unidentified=False)
 
     box = np.diag(atoms.get_cell())[:2]
 
-    return Label(cluster_positions, class_ids, box)
+    return Label(cluster_positions, class_ids, box, n_classes, marker_width=marker_width)

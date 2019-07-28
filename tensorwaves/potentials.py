@@ -8,7 +8,7 @@ from scipy.optimize import brentq
 
 from tensorwaves.bases import TensorWithGrid, TensorFactory, HasGrid, GridProperty
 from tensorwaves.interpolate_spline import interpolate_spline
-from tensorwaves.utils import batch_generator, complex_exponential
+from tensorwaves.utils import BatchGenerator, complex_exponential
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 kappa = 4 * np.pi * eps0 / (2 * np.pi * units.Bohr * units._e * units.C)
@@ -250,7 +250,7 @@ class KirklandPotential(PotentialParameterization):
 
 class PotentialProjector(object):
 
-    def __init__(self, num_samples=200, quadrature='riemann'):
+    def __init__(self, num_samples=500, quadrature='riemann'):
 
         self._quadrature = quadrature.lower()
 
@@ -302,7 +302,7 @@ class Potential(HasGrid, TensorFactory):
         self._periodic = periodic
         self._method = method
         self._atoms_per_loop = atoms_per_loop
-        self._projector = PotentialProjector(num_samples=100)
+        self._projector = PotentialProjector(num_samples=500)
         self._num_nodes = num_nodes
 
         if isinstance(parametrization, str):
@@ -505,11 +505,10 @@ class Potential(HasGrid, TensorFactory):
         for atomic_number in self._species:
             positions = self.get_positions_in_slice(atomic_number)
 
-            nodes = log_grid(min(self.sampling) / 2., self.parametrization.get_cutoff(atomic_number), self._num_nodes)
+            nodes = log_grid(min(self.sampling), self.parametrization.get_cutoff(atomic_number), self._num_nodes)
 
             if positions.shape[0] > 0:
-                block_margin = tf.cast(self.parametrization.get_cutoff(atomic_number) / min(self.sampling),
-                                       tf.int32)
+                block_margin = tf.cast(self.parametrization.get_cutoff(atomic_number) / min(self.sampling), tf.int32)
                 block_size = 2 * block_margin + 1
 
                 x = tf.linspace(0., tf.cast(block_size, tf.float32) * self.sampling[0] - self.sampling[0],
@@ -525,7 +524,9 @@ class Potential(HasGrid, TensorFactory):
 
                 radials = self._projector.project(self.parametrization.get_soft_function(atomic_number), nodes, a, b)
 
-                for start, size in batch_generator(positions.shape[0], self._atoms_per_loop):
+                generator = BatchGenerator(positions.shape[0], self._atoms_per_loop)
+
+                for start, size in generator.generate():
                     batch_positions = tf.slice(positions, [start, 0], [size, -1])
 
                     corner_positions = tf.cast(tf.round(batch_positions[:, :2] / self.sampling),
@@ -596,7 +597,7 @@ class Potential(HasGrid, TensorFactory):
         new_array = np.zeros(tuple(np.append(self.gpts, self.num_slices)), dtype=np.float32)
 
         for i, tensor in enumerate(self.slice_generator()):
-            new_array[..., i] = tensor
+            new_array[..., i] = tensor.tensor().numpy()
 
         box = np.append(self.extent, self.thickness)
 
@@ -617,7 +618,7 @@ class ArrayPotential(HasGrid):
 
     def __init__(self, array, box, num_slices=None, projected=False):
 
-        self._array = np.complex64(array - array.min())
+        self._array = tf.convert_to_tensor(array, dtype=tf.float32)
 
         if num_slices is None:
             num_slices = np.ceil(box[2] / .5).astype(np.int32)
@@ -652,7 +653,7 @@ class ArrayPotential(HasGrid):
 
         new_array = np.tile(self._array, np.append(repeat, 1))
 
-        self._array = new_array[start[0]:end[0], start[1]:end[1], :]
+        self._array = tf.convert_to_tensor(new_array[start[0]:end[0], start[1]:end[1], :], dtype=tf.float32)
 
         self.sampling = self.sampling
 
@@ -706,23 +707,21 @@ class ArrayPotential(HasGrid):
 
     def slice_generator(self):
         for i in range(self.num_slices):
-            yield self._create_tensor(i)
+            yield self._calculate_tensor(i)
 
-    def get_tensor(self, i=0):
-        return TensorWithGrid(self._create_tensor(i), extent=self.extent)
+    def _calculate_tensor(self, i=None):
 
-    def _create_tensor(self, i=None):
+        # if self._projected:
 
-        if self._projected:
-            return tf.convert_to_tensor(self._array[..., i][None, :, :], dtype=tf.complex64)
+        return TensorWithGrid(self._array[..., i][None, :, :], extent=self.extent, space='direct')
 
-        return (tf.reduce_sum(self._array[:, :, i * self.slice_thickness_voxels:
-                                                i * self.slice_thickness_voxels + self.slice_thickness_voxels],
-                              axis=2) * self.voxel_height)[None, :, :]
+        # return (tf.reduce_sum(self._array[:, :, i * self.slice_thickness_voxels:
+        #                                         i * self.slice_thickness_voxels + self.slice_thickness_voxels],
+        #                       axis=2) * self.voxel_height)[None, :, :]
 
     def copy(self):
         box = np.append(self.extent, self.thickness)
-        return self.__class__(array=self._array.copy(), box=box, num_slices=self._num_slices, projected=self._projected)
+        return self.__class__(array=tf.identity(self._array), box=box, num_slices=self._num_slices, projected=self._projected)
 
 
 def gaussian(rgd, alpha):
@@ -760,6 +759,8 @@ def potential_from_GPAW(calc, h=.05, rcgauss=0.02, spline_pts=200, n=2):
 
     v_r = interpolator.interpolate(v_r)
 
+    v_r = np.zeros_like(v_r)
+
     dens = calc.density
     dens.D_asp.redistribute(dens.atom_partition.as_serial())
     dens.Q_aL.redistribute(dens.atom_partition.as_serial())
@@ -790,6 +791,9 @@ def potential_from_GPAW(calc, h=.05, rcgauss=0.02, spline_pts=200, n=2):
         dv = LFC(new_gd, dv_a1)
         dv.set_positions(calc.spos_ac)
         dv.add(v_r)
+
     dens.gd.comm.broadcast(v_r, 0)
 
-    return ArrayPotential(array=-v_r * units.Ha, box=np.diag(calc.atoms.cell))
+    return v_r, dv_a1, rgd.r_g, dv_g, new_gd
+
+    # return ArrayPotential(array=-v_r * units.Ha, box=np.diag(calc.atoms.cell)), dv_a1

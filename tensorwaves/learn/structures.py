@@ -1,8 +1,9 @@
-import itertools
-
 import numpy as np
 from ase import Atoms
-from scipy.spatial import Voronoi
+
+from scipy.spatial import Voronoi, ConvexHull
+from matplotlib.path import Path
+from tensorwaves.learn.augment import bandpass_noise_2d
 
 
 def wrap_positions(positions, cell, center=(0.5, 0.5), eps=1e-7):
@@ -26,20 +27,72 @@ def hexagonal_to_rectangular(sites):
     return sites
 
 
-def fill_box(sites, box, rotation=0., border=0.):
+def random_graphene(box, a=2.46, border=.5):
+    basis = [(0, 0), (2 / 3., 1 / 3.)]
+    cell = [[a, 0], [-a / 2., a * 3 ** 0.5 / 2.]]
+    positions = np.dot(np.array(basis), np.array(cell))
+
+    supercell = SuperCell(positions=positions, cell=cell)
+
+    supercell = hexagonal_to_rectangular(supercell)
+
+    supercell = fill_box(supercell, box, np.random.rand() * 360, border=border)
+
+    supercell.relax(1)
+
+    return supercell
+
+
+def pseudo_graphene(box):
+    n = int(2 / (2.46 * 4.261) * box[0] * box[1])
+
+    cell = np.diag(box)
+
+    positions = np.array([[np.random.uniform(0, l) for l in box[:2]] for i in range(n)])
+
+    positions = lloyds_relaxation(positions, 50, cell)
+
+    positions = repeat_positions(positions, cell, 1, 1, True)
+    vor = Voronoi(positions)
+    vertices = vor.vertices
+
+    vertices = vertices[vertices[:, 0] > 0.]
+    vertices = vertices[vertices[:, 1] > 0.]
+    vertices = vertices[vertices[:, 0] < box[0]]
+    vertices = vertices[vertices[:, 1] < box[1]]
+
+    positions = lloyds_relaxation(vertices, 1, cell)
+
+    return SuperCell(positions=positions, cell=cell)
+
+
+# def insert_in_hole(supercell_1, supercell_2):
+#     polygon = blob() * np.random.uniform(10, 40) + 5
+#     path = Path(polygon)
+#
+#     inside = path.contains_points(supercell_1.positions)
+#
+#     positions_1 = positions_1[inside == False]
+#
+#     positions_2 =
+#
+#     return self + other
+
+
+def fill_box(supercell, box, rotation=0., border=0.):
     diagonal = np.hypot(box[0], box[1]) * 2
-    n = np.ceil(diagonal / sites.cell[0, 0]).astype(int)
-    m = np.ceil(diagonal / sites.cell[1, 1]).astype(int)
+    n = np.ceil(diagonal / supercell.cell[0, 0]).astype(int)
+    m = np.ceil(diagonal / supercell.cell[1, 1]).astype(int)
 
-    sites *= (n, m)
-    sites.set_cell(np.array(box) - border)
-    sites.rotate(rotation)
-    sites.center()
-    sites.crop()
-    sites.set_cell(box)
-    sites.positions += border / 2
+    supercell *= (n, m)
+    supercell.set_cell(np.array(box) - border)
+    supercell.rotate(rotation)
+    supercell.center()
+    supercell.crop()
+    supercell.set_cell(box)
+    supercell.positions += border / 2
 
-    return sites
+    return supercell
 
 
 def is_position_outside(positions, cell):
@@ -97,13 +150,46 @@ def voronoi_centroids(points):
     return centroids[:j]
 
 
-def lloyds_relaxation(positions):
+def lloyds_relaxation_iter(positions):
     n = len(positions)
 
     centroids = voronoi_centroids(positions)
     positions = centroids[:n]
 
     return positions
+
+
+def lloyds_relaxation(positions, n, cell):
+    cell = np.array(cell)
+    if cell.shape == (2,):
+        cell = np.diag(cell)
+
+    N = len(positions)
+    for i in range(n):
+        positions = repeat_positions(positions, cell, 1, 1, True)
+
+        centroids = voronoi_centroids(positions)
+        positions = centroids[:N]
+
+        positions = wrap_positions(positions, cell)
+
+    return positions
+
+
+def interpolate_smoothly(points, N):
+    interpolated = np.fft.fft(points)
+    half = (len(points) + 1) // 2
+    interpolated = np.concatenate((interpolated[:half],
+                                   np.zeros(len(points) * N),
+                                   interpolated[half:]))
+    return [x.real / len(points) for x in np.fft.fft(interpolated)[::-1]]
+
+
+def blob(n=5, m=5):
+    points = np.random.rand(n, 2)
+    points = points[ConvexHull(points).vertices]
+    points = np.array([interpolate_smoothly(point, m) for point in zip(*points)]).T
+    return np.array(points)
 
 
 class SuperCell(object):
@@ -197,6 +283,10 @@ class SuperCell(object):
             if a2 is None:
                 raise RuntimeError('non-existent array {} in other'.format(name))
 
+            a[n1:] = a2
+
+            self._arrays[name] = a
+
         return self
 
     __iadd__ = extend
@@ -276,25 +366,7 @@ class SuperCell(object):
     def relax(self, n=1):
 
         positions = self.positions
-
-        N = len(positions)
-        for i in range(n):
-            positions = repeat_positions(positions, self.cell, 1, 1, True)
-
-            # import matplotlib.pyplot as plt
-            # print(positions)
-
-            centroids = voronoi_centroids(positions)
-            positions = centroids[:N]
-
-            positions = wrap_positions(positions, self.cell)
-
-            # print(centroids)
-
-            # plt.plot(*centroids.T)
-            # plt.show()
-            # sss
-
+        positions = lloyds_relaxation(positions, n, self.cell)
         self.arrays['positions'][:] = positions
 
     def crop(self):
@@ -310,6 +382,29 @@ class SuperCell(object):
         R = np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
 
         self.arrays['positions'][:] = np.dot(R, self.positions.T - np.array(center)[:, None]).T + center
+
+    def make_hole(self, lower_corner, size):
+
+        polygon = lower_corner + blob() * size
+        path = Path(polygon)
+
+        inside = path.contains_points(self.positions)
+
+        del self[inside]
+
+    def random_strain(self, scale, amplitude, direction):
+
+        def lookup_nearest(x0, y0, x, y, z):
+            xi = np.abs(x - x0).argmin()
+            yi = np.abs(y - y0).argmin()
+            return z[yi, xi]
+
+        noise = bandpass_noise_2d(inner=0, outer=scale, shape=(32, 32))
+        x = np.linspace(0, self.cell[0, 0], 32)
+        y = np.linspace(0, self.cell[1, 1], 32)
+
+        self.positions[:, direction] += amplitude * np.array(
+            [lookup_nearest(p[0], p[1], x, y, noise) for p in self.positions]).T
 
     def copy(self):
         arrays = {key: value.copy() for key, value in self.arrays.items()}
@@ -352,7 +447,7 @@ class Site(object):
         if self.flip:
             if np.random.rand() < .5:
                 positions = structure.positions
-                positions[:, 2] = -positions[:, 2]
+                positions[:, 2] = structure.cell[2, 2] - positions[:, 2]
                 structure.positions = positions
 
         return structure

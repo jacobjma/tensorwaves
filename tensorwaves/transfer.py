@@ -51,7 +51,7 @@ class CTFBase(FrequencyTransfer):
         if self.temporal_envelope.focal_spread > 0.:
             tensor *= tf.cast(self.temporal_envelope.line_profile(alpha_max=alpha_max, n=n)[1], tf.complex64)
 
-        if self.gaussian_envelope.width != np.inf:
+        if np.any(self.gaussian_envelope.width != np.inf):
             tensor *= tf.cast(self.gaussian_envelope.line_profile(alpha_max=alpha_max, n=n)[1], tf.complex64)
 
         return k, tensor
@@ -139,7 +139,7 @@ class CTF(HasGridAndEnergy, CTFBase):
         if self.temporal_envelope.focal_spread > 0.:
             tensor *= tf.cast(self.temporal_envelope.build(alpha2).tensor(), tf.complex64)
 
-        if self.gaussian_envelope.width != np.inf:
+        if np.any(self.gaussian_envelope.width != np.inf):
             tensor *= tf.cast(self.gaussian_envelope.build(alpha2).tensor(), tf.complex64)
 
         return TensorWithGridAndEnergy(tensor, extent=self.extent, energy=self.energy, space='fourier')
@@ -217,7 +217,7 @@ class PrismCTF(HasEnergy, PrismCoefficients, CTFBase):
         if self.temporal_envelope.focal_spread > 0.:
             tensor *= tf.cast(self.temporal_envelope.build(alpha2), tf.complex64)
 
-        if self.gaussian_envelope.width != np.inf:
+        if np.any(self.gaussian_envelope.width != np.inf):
             tensor *= tf.cast(self.gaussian_envelope.build(alpha2), tf.complex64)
 
         return tensor

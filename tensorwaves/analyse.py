@@ -71,6 +71,7 @@ def plot_columns(columns, atoms, marker='o', **kwargs):
 
 
 def fwhm(profile):
+
     f = profile.numpy()
 
     amax = np.argmax(f)

@@ -32,7 +32,7 @@ def notifying_property(name):
     def setter(self, value):
         old = getattr(self, name)
         setattr(self, name, value)
-        change = old != value
+        change = np.all(old != value)
         self.notify_observers({'name': name, 'old': old, 'new': value, 'change': change})
 
     return property(getter, setter)
@@ -350,8 +350,7 @@ class Grid(Observable):
         return self.extent / np.float32(self.gpts)
 
     def linspace(self):
-        return (linspace_no_endpoint(0., self.extent[0], self.gpts[0]),
-                linspace_no_endpoint(0., self.extent[1], self.gpts[1]))
+        return tuple([linspace_no_endpoint(0., self.extent[i], self.gpts[i]) for i in range(self._dimensions)])
 
     def fftfreq(self):
         return fftfreq(self.gpts[0], self.sampling[0]), fftfreq(self.gpts[1], self.sampling[1])
@@ -660,6 +659,7 @@ class TensorWithGridAndEnergy(TensorWithGrid, HasGridAndEnergy):
 class LineProfile(TensorBase):
 
     def __init__(self, tensor, extent=None, sampling=None, space='direct'):
+        tensor = tf.cast(tensor, tf.float32)
         TensorBase.__init__(self, tensor=tensor, tensor_dimensions=1, spatial_dimensions=1, extent=extent,
                             sampling=sampling, space=space)
 

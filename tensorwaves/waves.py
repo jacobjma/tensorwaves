@@ -186,14 +186,14 @@ class ProbeWaves(WaveFactory):
 
         return TensorWaves(tensor, extent=self.extent, energy=self.energy)
 
-    def scan(self, scan, potential, max_batch, detectors, tracker=None):
+    def scan(self, scan, potential, max_batch, detectors, progress_bar=True):
 
         if not isinstance(detectors, Iterable):
             detectors = [detectors]
 
         scan._data = OrderedDict(zip(detectors, [[]] * len(detectors)))
 
-        for i, positions in enumerate(scan.generate_positions(max_batch)):
+        for i, positions in enumerate(scan.generate_positions(max_batch, progress_bar=progress_bar)):
             self.positions = positions
 
             tensor = self.multislice(potential, progress_bar=False)
@@ -203,16 +203,18 @@ class ProbeWaves(WaveFactory):
 
         return scan
 
-    def custom_scan(self, potential, max_batch, positions, detectors=None):
-        scan = CustomScan(scanable=self, positions=positions)
-        return self.scan(scan=scan, potential=potential, max_batch=max_batch, detectors=detectors)
+    def custom_scan(self, potential, max_batch, positions, detectors=None, progress_bar=True):
+        scan = CustomScan(positions=positions)
+        return self.scan(scan=scan, potential=potential, max_batch=max_batch, detectors=detectors,
+                         progress_bar=progress_bar)
 
     def linescan(self, potential, max_batch, start, end, num_positions=None, sampling=None, endpoint=True,
-                 detectors=None):
-        scan = LineScan(scanable=self, start=start, end=end, num_positions=num_positions,
+                 detectors=None, progress_bar=True):
+        scan = LineScan(start=start, end=end, num_positions=num_positions,
                         sampling=sampling, endpoint=endpoint)
 
-        return self.scan(scan=scan, potential=potential, detectors=detectors, max_batch=max_batch)
+        return self.scan(scan=scan, potential=potential, detectors=detectors, max_batch=max_batch,
+                         progress_bar=progress_bar)
 
     def get_fwhm(self):
         old_positions = self.positions
@@ -231,7 +233,7 @@ class ProbeWaves(WaveFactory):
     def gridscan(self, potential, max_batch, start=None, end=None, num_positions=None, sampling=None,
                  endpoint=False,
                  detectors=None):
-        scan = GridScan(scanable=self, start=start, end=end, num_positions=num_positions,
+        scan = GridScan(start=start, end=end, num_positions=num_positions,
                         sampling=sampling, endpoint=endpoint)
 
         return self.scan(scan=scan, potential=potential, max_batch=max_batch, detectors=detectors)
