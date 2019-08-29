@@ -205,7 +205,8 @@ class NMS(object):
             maps = [m.reshape(m.shape[-2:] + (-1,)) for m in maps]
             maps = np.concatenate(maps, axis=2)
 
-        accepted, assigned = non_maximum_suppresion(markers, self._threshold, self._x_disc, self._y_disc, self._weights,
+        accepted, assigned = non_maximum_suppresion(markers, self._threshold, self._x_disc,
+                                                    self._y_disc, self._weights,
                                                     maps)
 
         if self._return_indices:
